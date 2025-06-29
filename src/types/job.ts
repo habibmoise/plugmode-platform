@@ -66,3 +66,16 @@ export interface SearchAnalytics {
   search_timestamp: string;
   session_id: string;
 }
+export interface UserProfile {
+  firstName: string | null;
+  lastName: string | null;
+  location: string | null;
+  skills: string[] | null;
+  experience_level: string | null;
+  id?: string;
+  email?: string;
+  phone?: string;
+  bio?: string;
+  profile_completion?: number;
+  subscription_tier?: string;
+}

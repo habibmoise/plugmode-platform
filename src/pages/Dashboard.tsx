@@ -1,3 +1,4 @@
+import { Job, JobMatch, UserProfile } from '../types/job';
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Header } from '../components/Header';
@@ -5,13 +6,12 @@ import { ProfileProgress } from '../components/ProfileProgress';
 import { PersonalizedInsights } from '../components/PersonalizedInsights';
 import { EnhancedJobCard } from '../components/EnhancedJobCard';
 import { SkillsMatchIndicator } from '../components/SkillsMatchIndicator';
-import { AICoachChat } from '../components/AICoachChat';
+import AICoachChat from "../components/AICoachChat";
 import { CareerAnalytics } from '../components/CareerAnalytics';
 import { useAuth } from '../contexts/AuthContext';
 import { useSubscription } from '../contexts/SubscriptionContext';
 import { useToast } from '../contexts/ToastContext';
 import { supabase } from '../lib/supabase';
-import { Job } from '../types/job';
 import { User, Heart, FileText, BookmarkCheck, Search, TrendingUp, Globe, Users, Target, BarChart3, MessageCircle } from 'lucide-react';
 
 interface UserProfile {
@@ -81,7 +81,6 @@ export function Dashboard() {
               title: 'New High-Quality Match!',
               message: `Found a ${newMatch.match_score}% match for you. Check your matches!`
             });
-            // Optionally refresh job matches
             loadDashboardData();
           }
         }
@@ -118,6 +117,7 @@ export function Dashboard() {
       supabase.removeChannel(insightsSubscription);
     };
   };
+  
   const loadDashboardData = async () => {
     if (!user) return;
 
@@ -125,7 +125,7 @@ export function Dashboard() {
       // Load user profile
       const { data: userData } = await supabase
         .from('users')
-        .select('name, location, skills, experience_level')
+        .select('name, location, skills, experience_level, avatar_url')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -190,18 +190,36 @@ export function Dashboard() {
       setAppliedJobs(new Set(applicationsData?.map(item => item.job_id) || []));
 
       // Calculate stats
-      const profileCompletion = calculateProfileCompletion(userData, resumeData);
-      const skillsMatchAvg = matchesData && matchesData.length > 0 
-        ? Math.round(matchesData.reduce((sum, match) => sum + match.match_score, 0) / matchesData.length)
-        : 0;
+// Calculate stats
+const calculateProfileCompletion = (profile: any, resume: any) => {
+  const steps = [
+    { completed: true, points: 5 }, // Account created
+    { completed: !!profile?.name, points: 15 }, // Name
+    { completed: !!profile?.location, points: 15 }, // Location  
+    { completed: !!profile?.experience_level, points: 15 }, // Experience
+    { completed: !!(profile?.skills && profile.skills.length > 0), points: 20 }, // Skills
+    { completed: !!profile?.avatar_url, points: 15 }, // Avatar
+    { completed: !!(resume && resume.length > 0), points: 15 } // Resume
+  ];
 
-      setStats({
-        savedJobs: savedJobsData?.length || 0,
-        applications: applicationsData?.length || 0,
-        profileCompletion,
-        jobMatches: matchesData?.length || 0,
-        skillsMatchAvg
-      });
+  const totalPoints = steps.reduce((sum, step) => sum + step.points, 0);
+  const earnedPoints = steps.filter(step => step.completed).reduce((sum, step) => sum + step.points, 0);
+  
+  return Math.round((earnedPoints / totalPoints) * 100);
+};
+
+const profileCompletion = calculateProfileCompletion(userData, resumeData);
+const skillsMatchAvg = matchesData && matchesData.length > 0 
+  ? Math.round(matchesData.reduce((sum, match) => sum + match.match_score, 0) / matchesData.length)
+  : 0;
+
+setStats({
+  savedJobs: savedJobsData?.length || 0,
+  applications: applicationsData?.length || 0,
+  profileCompletion, // ← Now actually uses the calculated value
+  jobMatches: matchesData?.length || 0,
+  skillsMatchAvg
+});
 
     } catch (error) {
       console.error('Error loading dashboard data:', error);
@@ -242,16 +260,6 @@ export function Dashboard() {
         message: 'Failed to schedule automated application.'
       });
     }
-  };
-
-  const calculateProfileCompletion = (profile: any, resume: any) => {
-    let completion = 10; // Base for having an account
-    if (profile?.name) completion += 15;
-    if (profile?.location) completion += 15;
-    if (profile?.experience_level) completion += 15;
-    if (profile?.skills && profile.skills.length > 0) completion += 20;
-    if (resume && resume.length > 0) completion += 25;
-    return completion;
   };
 
   const toggleSaveJob = async (jobId: string) => {
@@ -482,62 +490,71 @@ export function Dashboard() {
           </div>
         </div>
 
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-          {/* Left Column - Profile Progress */}
-          <div className="lg:col-span-1 space-y-8">
+        {/* STACKED LAYOUT - Each section gets full width and proper space */}
+        <div className="space-y-8 mb-8">
+          
+          {/* Profile Progress - Full Width */}
+          <div className="bg-white rounded-xl shadow-sm border p-6">
+            <h2 className="text-xl font-semibold mb-6 flex items-center">
+              <User className="h-5 w-5 mr-2 text-orange-600" />
+              Profile Progress
+            </h2>
             <ProfileProgress />
-            
-            {/* AI Coach Chat */}
-            <AICoachChat userProfile={userProfile} />
-          </div>
-
-          {/* Right Column - Insights and Analytics */}
-          <div className="lg:col-span-2 space-y-8">
-            <PersonalizedInsights />
-            
-            {/* Career Analytics for Career OS users */}
-            {subscriptionStatus.tier === 'career_os' && (
-              <CareerAnalytics />
-            )}
-          </div>
-        </div>
-
-        {/* Market Insights */}
-        <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl p-6 mb-8 border border-blue-200">
-          <div className="flex items-center space-x-3 mb-4">
-            <div className="bg-blue-100 p-2 rounded-lg">
-              <TrendingUp className="h-6 w-6 text-blue-600" />
-            </div>
-            <h3 className="text-lg font-semibold text-black">Market Intelligence</h3>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white/60 rounded-lg p-4">
-              <div className="flex items-center space-x-2 mb-2">
-                <Globe className="h-5 w-5 text-green-600" />
-                <span className="font-medium text-gray-900">Global Hiring Trends</span>
-              </div>
-              <p className="text-sm text-gray-700">Remote hiring up 40% in your region this quarter</p>
+          {/* Two Column Section for Other Features */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* Left Column - Insights */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <h3 className="text-lg font-semibold text-black mb-4 flex items-center">
+                <TrendingUp className="h-5 w-5 mr-2 text-purple-600" />
+                Personalized Insights
+              </h3>
+              <PersonalizedInsights />
             </div>
             
-            <div className="bg-white/60 rounded-lg p-4">
-              <div className="flex items-center space-x-2 mb-2">
-                <Users className="h-5 w-5 text-blue-600" />
-                <span className="font-medium text-gray-900">Skills Demand</span>
+            {/* Right Column - Analytics (for Career OS users) */}
+            {subscriptionStatus?.tier === 'career_os' ? (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <h3 className="text-lg font-semibold text-black mb-4 flex items-center">
+                  <BarChart3 className="h-5 w-5 mr-2 text-green-600" />
+                  Career Analytics
+                </h3>
+                <CareerAnalytics />
               </div>
-              <p className="text-sm text-gray-700">
-                {userProfile?.skills?.[0] || 'JavaScript'} roles increased 25% this month
-              </p>
-            </div>
-            
-            <div className="bg-white/60 rounded-lg p-4">
-              <div className="flex items-center space-x-2 mb-2">
-                <BarChart3 className="h-5 w-5 text-purple-600" />
-                <span className="font-medium text-gray-900">Salary Trends</span>
+            ) : (
+              <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-200">
+                <h3 className="text-lg font-semibold text-black mb-4">Market Intelligence</h3>
+                
+                <div className="space-y-4">
+                  <div className="bg-white/60 rounded-lg p-4">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <Globe className="h-5 w-5 text-green-600" />
+                      <span className="font-medium text-gray-900">Global Hiring Trends</span>
+                    </div>
+                    <p className="text-sm text-gray-700">Remote hiring up 40% in your region this quarter</p>
+                  </div>
+                  
+                  <div className="bg-white/60 rounded-lg p-4">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <Users className="h-5 w-5 text-blue-600" />
+                      <span className="font-medium text-gray-900">Skills Demand</span>
+                    </div>
+                    <p className="text-sm text-gray-700">
+                      {userProfile?.skills?.[0] || 'JavaScript'} roles increased 25% this month
+                    </p>
+                  </div>
+                  
+                  <div className="bg-white/60 rounded-lg p-4">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <BarChart3 className="h-5 w-5 text-purple-600" />
+                      <span className="font-medium text-gray-900">Salary Trends</span>
+                    </div>
+                    <p className="text-sm text-gray-700">Average remote salaries 20% above local market</p>
+                  </div>
+                </div>
               </div>
-              <p className="text-sm text-gray-700">Average remote salaries 20% above local market</p>
-            </div>
+            )}
           </div>
         </div>
 
@@ -620,6 +637,68 @@ export function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* CONDITIONAL AI CHAT SECTION - ADDED AT THE END */}
+        <div className="mb-8">
+          {/* AI Career Coach - ONLY show for paid tiers */}
+          {(subscriptionStatus?.tier === 'professional' || subscriptionStatus?.tier === 'career_os') && (
+            <div className="bg-white rounded-xl shadow-sm border">
+              <div className="p-6 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xl font-semibold flex items-center">
+                      <MessageCircle className="h-5 w-5 mr-2 text-blue-600" />
+                      AI Career Coach
+                    </h2>
+                    <p className="text-gray-600 text-sm mt-1">
+                      Get personalized career advice and guidance
+                    </p>
+                  </div>
+                  <div className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                    {subscriptionStatus?.tier === 'career_os' ? 'Career OS' : 'Professional'}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="p-6">
+                <div className="min-h-[600px] border border-gray-200 rounded-lg overflow-hidden">
+                  <AICoachChat userProfile={userProfile} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Show upgrade prompt for free tier users */}
+          {subscriptionStatus?.tier === 'free' && (
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl border border-blue-200 p-6">
+              <div className="text-center">
+                <div className="mx-auto w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4">
+                  <MessageCircle className="h-6 w-6 text-blue-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  Unlock AI Career Coaching
+                </h3>
+                <p className="text-gray-600 mb-4">
+                  Get personalized career advice, resume optimization, and unlimited AI conversations.
+                </p>
+                <div className="space-y-2 text-sm text-gray-700 mb-6">
+                  <div className="flex items-center justify-center">
+                    <span className="text-green-600 mr-2">✓</span>
+                    Professional: 50 AI conversations/month
+                  </div>
+                  <div className="flex items-center justify-center">
+                    <span className="text-green-600 mr-2">✓</span>
+                    Career OS: Unlimited AI conversations + voice responses
+                  </div>
+                </div>
+                <button className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                  Upgrade to Professional
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
       </div>
     </div>
   );

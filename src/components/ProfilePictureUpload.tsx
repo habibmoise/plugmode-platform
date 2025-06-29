@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { Upload, Image, CheckCircle, AlertCircle, X, Loader, User } from 'lucide-react';
+import { Image, AlertCircle, X, Loader } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { supabase } from '../lib/supabase';
@@ -10,7 +10,11 @@ interface ProfilePictureUploadProps {
   className?: string;
 }
 
-export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, className = '' }: ProfilePictureUploadProps) {
+export function ProfilePictureUpload({ 
+  onUploadComplete, 
+  currentAvatarUrl, 
+  className = '' 
+}: ProfilePictureUploadProps) {
   const { user } = useAuth();
   const { showToast } = useToast();
   const [isDragging, setIsDragging] = useState(false);
@@ -20,22 +24,22 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const validateFile = (file: File): string | null => {
-    // Check file type
     if (!['image/jpeg', 'image/png'].includes(file.type)) {
       return 'Please upload a JPG or PNG image.';
     }
-
-    // Check file size (2MB limit)
     if (file.size > 2 * 1024 * 1024) {
       return 'File size must be less than 2MB.';
     }
-
     return null;
   };
 
   const uploadFile = async (file: File) => {
     if (!user) {
-      showToast({ type: 'error', title: 'Authentication Required', message: 'Please log in to upload a profile picture.' });
+      showToast({ 
+        type: 'error', 
+        title: 'Authentication Required', 
+        message: 'Please log in to upload a profile picture.' 
+      });
       return;
     }
 
@@ -45,7 +49,10 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
     setPreviewUrl(null);
 
     try {
-      // Validate file
+      console.log('🚀 Starting photo upload process...');
+      console.log('User ID:', user.id);
+      console.log('File:', file.name, file.size, file.type);
+
       const validationError = validateFile(file);
       if (validationError) {
         setError(validationError);
@@ -53,24 +60,23 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
         return;
       }
 
-      // Generate preview URL
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreviewUrl(reader.result as string);
       };
       reader.readAsDataURL(file);
 
-      // Create unique file path
       const fileExt = file.name.split('.').pop();
       const fileName = `${user.id}/${Date.now()}.${fileExt}`;
 
       setUploadProgress(25);
+      console.log('📁 Uploading to storage with path:', fileName);
 
-      // Delete existing avatar if it exists
       if (currentAvatarUrl) {
         try {
           const oldFileName = currentAvatarUrl.split('/').pop();
           if (oldFileName) {
+            console.log('🗑️ Deleting old avatar:', oldFileName);
             await supabase.storage
               .from('avatars')
               .remove([`${user.id}/${oldFileName}`]);
@@ -82,7 +88,7 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
 
       setUploadProgress(50);
 
-      // Upload to Supabase Storage
+      console.log('⬆️ Uploading file to storage...');
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('avatars')
         .upload(fileName, file, {
@@ -90,22 +96,44 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
           upsert: true
         });
 
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        console.error('❌ Storage upload failed:', uploadError);
+        throw uploadError;
+      }
 
+      console.log('✅ Storage upload successful:', uploadData);
       setUploadProgress(75);
 
-      // Get public URL
+      console.log('🔗 Getting public URL...');
       const { data: { publicUrl } } = supabase.storage
         .from('avatars')
         .getPublicUrl(fileName);
 
-      // Update user's avatar_url in the database
-      const { error: dbError } = await supabase
+      console.log('✅ Public URL generated:', publicUrl);
+
+      console.log('💾 Updating database...');
+      console.log('User ID for update:', user.id);
+      console.log('Public URL to save:', publicUrl);
+
+      const { data: updateResult, error: dbError } = await supabase
         .from('users')
         .update({ avatar_url: publicUrl })
-        .eq('id', user.id);
+        .eq('id', user.id)
+        .select();
 
-      if (dbError) throw dbError;
+      console.log('📊 Database update result:', { updateResult, dbError });
+
+      if (dbError) {
+        console.error('❌ Database update failed:', dbError);
+        throw new Error(`Database update failed: ${dbError.message}`);
+      }
+
+      if (!updateResult || updateResult.length === 0) {
+        console.error('❌ No rows updated - user not found or permission denied');
+        throw new Error('No user record found or permission denied');
+      }
+
+      console.log('✅ Database updated successfully:', updateResult[0]);
 
       setUploadProgress(100);
       showToast({
@@ -118,13 +146,18 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
         onUploadComplete(publicUrl);
       }
 
-    } catch (err: any) {
-      console.error('Upload error:', err);
-      setError(err.message || 'Failed to upload profile picture. Please try again.');
+      window.dispatchEvent(new CustomEvent('avatarUpdated', { 
+        detail: { avatarUrl: publicUrl } 
+      }));
+
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      console.error('💥 Upload error:', err);
+      setError(errorMessage);
       showToast({
         type: 'error',
         title: 'Upload Failed',
-        message: err.message || 'Failed to upload profile picture.'
+        message: errorMessage
       });
     } finally {
       setUploading(false);
@@ -135,7 +168,7 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
     }
   };
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
 
@@ -143,14 +176,14 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
     if (files.length > 0) {
       uploadFile(files[0]);
     }
-  }, [user, showToast, onUploadComplete]);
+  }, []);
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(true);
   }, []);
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
   }, []);
@@ -196,7 +229,7 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
                 <div
                   className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                   style={{ width: `${uploadProgress}%` }}
-                ></div>
+                />
               </div>
               <p className="text-sm text-gray-600 mt-1">{uploadProgress}% complete</p>
             </div>
@@ -236,7 +269,7 @@ export function ProfilePictureUpload({ onUploadComplete, currentAvatarUrl, class
 
               <label
                 htmlFor="profile-picture-upload"
-                className="inline-flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
               >
                 <Image className="h-5 w-5" />
                 <span>Choose Image</span>

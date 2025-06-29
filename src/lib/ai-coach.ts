@@ -1,130 +1,49 @@
-import { openaiService } from './openai';
-import { voiceCoachService } from './elevenlabs';
-import { lingoService } from './lingo';
+// src/lib/ai-coach.ts
 import { supabase } from './supabase';
 
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
 export interface CoachingResponse {
-  message: string;
-  translatedMessage?: string;
-  audioUrl?: string;
-  upgradeRequired?: boolean;
-  usageRemaining?: number;
+  response: string;
+  remainingUses: number;
+  tier: string;
+  success: boolean;
 }
 
-export interface CoachingOptions {
-  userTier: 'free' | 'professional' | 'career_os';
-  targetLanguage?: string;
-  includeVoice?: boolean;
-  userContext?: any;
-}
+export const generateCareerCoaching = async (
+  message: string,
+  userId: string,
+  conversationId?: string
+): Promise<CoachingResponse> => {
+  try {
+    // Check user subscription and usage limits
+    const { data: subscription } = await supabase
+      .from('user_subscriptions')
+      .select('subscription_tier, subscription_status')
+      .eq('user_id', userId)
+      .single();
 
-export class AICareerCoach {
-  async processMessage(
-    userId: string, 
-    message: string, 
-    options: CoachingOptions
-  ): Promise<CoachingResponse> {
-    try {
-      // Check usage limits based on tier
-      const usageCheck = await this.checkAIUsageLimit(userId, options.userTier);
-      if (!usageCheck.canUse) {
-        return {
-          message: this.getUpgradeMessage(options.userTier),
-          upgradeRequired: true,
-          usageRemaining: usageCheck.remaining
-        };
-      }
+    const tier = subscription?.subscription_tier || 'free';
+    const status = subscription?.subscription_status || 'active';
 
-      // Get conversation history
-      const conversationHistory = await this.getConversationHistory(userId);
-
-      // Generate AI response
-      const aiResponse = await openaiService.generateCareerCoaching(
-        message,
-        options.userContext || {},
-        conversationHistory
-      );
-
-      let response: CoachingResponse = {
-        message: aiResponse,
-        usageRemaining: usageCheck.remaining - 1
-      };
-
-      // Add translation for Career OS users
-      if (options.targetLanguage && options.userTier === 'career_os') {
-        try {
-          const translation = await lingoService.translateCoachingResponse(
-            response.message,
-            options.targetLanguage,
-            options.userTier
-          );
-          response.translatedMessage = translation.translatedText;
-        } catch (error) {
-          console.error('Translation error:', error);
-        }
-      }
-
-      // Add voice response for Career OS users
-      if (options.includeVoice && options.userTier === 'career_os') {
-        try {
-          const audioBuffer = await voiceCoachService.generateCoachingResponse(
-            response.translatedMessage || response.message,
-            options.userTier
-          );
-          response.audioUrl = voiceCoachService.createAudioURL(audioBuffer);
-        } catch (error) {
-          console.error('Voice generation error:', error);
-        }
-      }
-
-      // Save conversation and track usage
-      await this.saveConversation(userId, message, response.message);
-      await this.incrementAIUsage(userId);
-
-      return response;
-    } catch (error) {
-      console.error('AI coaching error:', error);
-      return {
-        message: 'I apologize, but I encountered an error. Please try again in a moment.',
-        upgradeRequired: false
-      };
+    if (status !== 'active') {
+      throw new Error('Subscription is not active. Please check your billing.');
     }
-  }
 
-  private async checkAIUsageLimit(userId: string, tier: string): Promise<{ canUse: boolean; remaining: number }> {
-    const limits = { 
-      free: 0, 
-      professional: 5, 
-      career_os: -1 // unlimited
-    };
-    
-    const limit = limits[tier as keyof typeof limits];
-    
-    if (limit === -1) {
-      return { canUse: true, remaining: -1 }; // unlimited
-    }
-    
-    if (limit === 0) {
-      return { canUse: false, remaining: 0 }; // not allowed
-    }
-    
-    // Check current month usage
-    const usage = await this.getCurrentMonthUsage(userId);
-    const remaining = Math.max(0, limit - usage);
-    
-    return { 
-      canUse: usage < limit, 
-      remaining 
-    };
-  }
+    // Check usage limits based on tier
+    let monthlyLimit = 5; // Free tier default
+    if (tier === 'professional') monthlyLimit = 50;
+    if (tier === 'career_os') monthlyLimit = -1; // Unlimited
 
-  private async getCurrentMonthUsage(userId: string): Promise<number> {
-    try {
-      const startOfMonth = new Date();
-      startOfMonth.setDate(1);
-      startOfMonth.setHours(0, 0, 0, 0);
-
-      const { data, error } = await supabase
+    if (monthlyLimit !== -1) {
+      // Check current month usage
+      const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const { data: usage } = await supabase
         .from('user_usage')
         .select('usage_count')
         .eq('user_id', userId)
@@ -132,104 +51,105 @@ export class AICareerCoach {
         .gte('reset_date', startOfMonth.toISOString())
         .single();
 
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error checking usage:', error);
-        return 0;
+      const currentUsage = usage?.usage_count || 0;
+      const remaining = monthlyLimit - currentUsage;
+
+      if (remaining <= 0) {
+        return {
+          response: `You've reached your monthly limit of ${monthlyLimit} AI conversations. Upgrade to Professional for 50 conversations/month or Career OS for unlimited conversations.`,
+          remainingUses: 0,
+          tier,
+          success: false
+        };
       }
-
-      return data?.usage_count || 0;
-    } catch (error) {
-      console.error('Error getting usage:', error);
-      return 0;
     }
-  }
 
-  private async incrementAIUsage(userId: string): Promise<void> {
-    try {
-      const today = new Date();
-      const resetDate = new Date(today.getFullYear(), today.getMonth(), 1);
+    // For demo purposes, provide contextual responses based on tier and message
+    let response = '';
+    
+    if (message.toLowerCase().includes('resume') || message.toLowerCase().includes('cv')) {
+      response = tier === 'career_os' 
+        ? "I'd be happy to help with your resume! As a Career OS member, I can provide detailed analysis, suggest improvements, and even help you create multiple versions for different roles. Share your current resume or tell me about the role you're targeting."
+        : tier === 'professional'
+        ? "Great question about resumes! I can help you optimize your resume structure and content. For advanced features like multiple resume versions and A/B testing, consider upgrading to Career OS."
+        : "I can provide basic resume tips! For detailed resume analysis and optimization, consider upgrading to Professional or Career OS for advanced features.";
+    } else if (message.toLowerCase().includes('job') || message.toLowerCase().includes('career')) {
+      response = tier === 'career_os'
+        ? "Let's explore your career path! With Career OS, I can provide comprehensive career guidance, market insights, and personalized strategies. What specific aspect of your career would you like to focus on?"
+        : tier === 'professional'
+        ? "I'm here to help with your career development! I can provide job search strategies and career advice. What's your current situation and goal?"
+        : "I can offer general career advice! For detailed career planning and market insights, Professional and Career OS tiers offer more comprehensive guidance.";
+    } else if (message.toLowerCase().includes('salary') || message.toLowerCase().includes('negotiate')) {
+      response = tier === 'career_os'
+        ? "Salary negotiation is crucial! With your Career OS access, I can provide detailed negotiation strategies, market data insights, and role-specific advice. What's your current situation?"
+        : "I can provide general salary negotiation tips. For detailed market insights and personalized strategies, Career OS offers comprehensive salary guidance.";
+    } else {
+      response = `Hello! I'm your AI Career Coach. ${
+        tier === 'career_os' 
+          ? 'With your Career OS subscription, I can provide unlimited, comprehensive career guidance. How can I help you today?' 
+          : tier === 'professional'
+          ? 'As a Professional member, I can offer detailed career advice. What would you like to discuss?'
+          : 'I can provide basic career guidance. For unlimited conversations and advanced features, consider upgrading to Professional or Career OS.'
+      }`;
+    }
 
-      const { error } = await supabase
+    // Store conversation in database
+    await supabase.from('ai_conversations').insert({
+      user_id: userId,
+      conversation_id: conversationId || `coaching-${Date.now()}`,
+      message: message,
+      response: response,
+      tier: tier
+    });
+
+    // Increment usage count for non-unlimited tiers
+    if (monthlyLimit !== -1) {
+      const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      
+      // Get existing usage
+      const { data: existingUsage } = await supabase
         .from('user_usage')
-        .upsert({
-          user_id: userId,
-          usage_type: 'ai_conversations',
-          usage_count: 1,
-          reset_date: resetDate.toISOString().split('T')[0]
-        }, {
-          onConflict: 'user_id,usage_type,reset_date',
-          ignoreDuplicates: false
-        });
-
-      if (error) {
-        console.error('Error incrementing usage:', error);
-      }
-    } catch (error) {
-      console.error('Error tracking usage:', error);
-    }
-  }
-
-  private async getConversationHistory(userId: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
-    try {
-      const { data, error } = await supabase
-        .from('user_events')
-        .select('event_data')
+        .select('usage_count')
         .eq('user_id', userId)
-        .eq('event_type', 'ai_conversation')
-        .order('created_at', { ascending: false })
-        .limit(6);
+        .eq('usage_type', 'ai_conversations')
+        .eq('reset_date', startOfMonth.toISOString())
+        .single();
 
-      if (error) {
-        console.error('Error getting conversation history:', error);
-        return [];
+      if (existingUsage) {
+        await supabase
+          .from('user_usage')
+          .update({ usage_count: existingUsage.usage_count + 1 })
+          .eq('user_id', userId)
+          .eq('usage_type', 'ai_conversations')
+          .eq('reset_date', startOfMonth.toISOString());
+      } else {
+        await supabase
+          .from('user_usage')
+          .insert({
+            user_id: userId,
+            usage_type: 'ai_conversations',
+            usage_count: 1,
+            reset_date: startOfMonth.toISOString()
+          });
       }
-
-      return data?.map(event => ({
-        role: event.event_data.role,
-        content: event.event_data.content
-      })).reverse() || [];
-    } catch (error) {
-      console.error('Error loading conversation history:', error);
-      return [];
     }
+
+    const remainingUses = monthlyLimit === -1 ? -1 : monthlyLimit - (usage?.usage_count || 0) - 1;
+
+    return {
+      response,
+      remainingUses,
+      tier,
+      success: true
+    };
+
+  } catch (error) {
+    console.error('Career coaching error:', error);
+    return {
+      response: 'I apologize, but I encountered an error. Please try again in a moment.',
+      remainingUses: 0,
+      tier: 'free',
+      success: false
+    };
   }
-
-  private async saveConversation(userId: string, userMessage: string, aiResponse: string): Promise<void> {
-    try {
-      // Save user message
-      await supabase.from('user_events').insert({
-        user_id: userId,
-        event_type: 'ai_conversation',
-        event_data: {
-          role: 'user',
-          content: userMessage,
-          timestamp: new Date().toISOString()
-        }
-      });
-
-      // Save AI response
-      await supabase.from('user_events').insert({
-        user_id: userId,
-        event_type: 'ai_conversation',
-        event_data: {
-          role: 'assistant',
-          content: aiResponse,
-          timestamp: new Date().toISOString()
-        }
-      });
-    } catch (error) {
-      console.error('Error saving conversation:', error);
-    }
-  }
-
-  private getUpgradeMessage(tier: string): string {
-    if (tier === 'free') {
-      return "AI Career Coaching is available with Professional ($4.99/month) for 5 sessions per month, or Career OS ($9.99/month) for unlimited coaching with voice responses and multi-language support!";
-    } else if (tier === 'professional') {
-      return "You've used all 5 AI coaching sessions this month. Upgrade to Career OS ($9.99/month) for unlimited coaching with voice responses and multi-language support!";
-    }
-    return "Upgrade required to access AI coaching features.";
-  }
-}
-
-export const aiCareerCoach = new AICareerCoach();
+};

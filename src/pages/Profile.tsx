@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Header } from '../components/Header';
-import { ResumeUpload } from '../components/ResumeUpload';
+import ResumeUpload from '../components/ResumeUpload';
 import { ProfilePictureUpload } from '../components/ProfilePictureUpload';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { supabase } from '../lib/supabase';
 import { countries } from './Signup';
-import { User, MapPin, Briefcase, Save, FileText, Download, Trash2, ArrowLeft, Plus, X } from 'lucide-react';
+import { User, MapPin, Briefcase, Save, FileText, Trash2, ArrowLeft, Plus, X } from 'lucide-react';
 
 interface Resume {
   id: string;

@@ -99,7 +99,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      
+      // Enhanced success message with user name
+      const userName = user?.user_metadata?.firstName || 
+                       user?.user_metadata?.name || 
+                       user?.email?.split('@')[0] || 
+                       'there';
+      
+      // Clear local state first
+      setUser(null);
+      setSession(null);
+      setLoading(false);
+      
+      // Show enhanced goodbye message
+      try {
+        // Try to use toast if available (check if showToast exists in window context)
+        if (typeof window !== 'undefined' && (window as any).showToast) {
+          (window as any).showToast({
+            type: 'success',
+            title: `See you later, ${userName}! 👋`,
+            message: 'You have been securely logged out. Thanks for using PlugMode!'
+          });
+        } else {
+          // Fallback to enhanced alert
+          alert(`👋 Goodbye ${userName}! You have been logged out successfully.\n\nThanks for using PlugMode - we can't wait to see you again!`);
+        }
+      } catch (toastError) {
+        // Final fallback
+        alert(`✅ Successfully logged out! See you soon, ${userName}!`);
+      }
+      
+      // Redirect to home page with a slight delay to show message
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 1500);
+      
+    } catch (error) {
+      console.error('Error signing out:', error);
+      
+      // Enhanced error message
+      const userName = user?.user_metadata?.firstName || 
+                       user?.user_metadata?.name || 
+                       'there';
+      
+      try {
+        if (typeof window !== 'undefined' && (window as any).showToast) {
+          (window as any).showToast({
+            type: 'error',
+            title: 'Logout Issue 😕',
+            message: 'Had trouble logging you out completely. Please close your browser to ensure you\'re fully signed out.'
+          });
+        } else {
+          alert(`❌ Hi ${userName}, we had trouble logging you out completely.\n\nFor your security, please close your browser window.`);
+        }
+      } catch (toastError) {
+        alert('❌ Had trouble logging out. Please close your browser for security.');
+      }
+    }
   };
 
   const value = {

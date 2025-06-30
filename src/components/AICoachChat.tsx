@@ -108,6 +108,20 @@ const AICoachChat: React.FC<AICoachChatProps> = ({ className = '' }) => {
     scrollToBottom();
   }, [messages]);
 
+  // Add user tier loading effect - Simple demo account detection
+  useEffect(() => {
+    if (user?.email) {
+      // For demo accounts, always set to career_os
+      if (user.email.includes('demo') || user.email.includes('judge')) {
+        setUserTier('career_os');
+      } else {
+        // For other users, you could check their actual subscription
+        // For now, default to career_os for testing
+        setUserTier('career_os');
+      }
+    }
+  }, [user]);
+
   // Add welcome message
   useEffect(() => {
     if (messages.length === 0) {

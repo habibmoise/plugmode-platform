@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@netlify/functions": "^4.1.8",
     "@revenuecat/purchases-js": "^1.6.0",
     "@supabase/supabase-js": "^2.39.0",
     "formidable": "^3.5.4",
@@ -26,7 +27,7 @@
   },
   "devDependencies": {
     "@types/formidable": "^3.4.5",
-    "@types/node": "^24.0.6",
+    "@types/node": "^24.0.7",
     "@types/pdf-parse": "^1.1.5",
     "@types/pdfjs-dist": "^2.10.378",
     "@types/react": "^18.3.5",

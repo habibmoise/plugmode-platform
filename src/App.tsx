@@ -1,4 +1,3 @@
-import DiagnosticTest from './pages/DiagnosticTest';
 import AuthCallback from './pages/AuthCallback';
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
@@ -137,7 +136,6 @@ function App() {
                 } 
               />
               <Route path="/auth/callback" element={<AuthCallback />} />
-              <Route path="/diagnostic" element={<DiagnosticTest />} />
             </Routes>
             <ToastContainer />
           </Router>

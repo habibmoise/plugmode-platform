@@ -1,7 +1,7 @@
 import GoogleSignupButton from '../components/GoogleSignupButton';
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, CheckCircle, Globe, Target, Users, Quote, Plus, X } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle, Globe, Target, Users, Quote, Plus, X, AlertCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { supabase } from '../lib/supabase';
@@ -42,7 +42,10 @@ export function Signup() {
   const [newSkill, setNewSkill] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
+  
+  // Validation states
+  const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
+  const [touched, setTouched] = useState<{ [key: string]: boolean }>({});
   
   const { signUp } = useAuth();
   const { showToast } = useToast();
@@ -73,6 +76,88 @@ export function Signup() {
     'Data Analysis', 'Excel', 'Communication', 'Leadership'
   ];
 
+  // Validation functions
+  const validateForm = () => {
+    const newErrors: { [key: string]: string } = {};
+
+    // First Name validation
+    if (!firstName?.trim()) {
+      newErrors.firstName = 'First name is required';
+    } else if (firstName.trim().length < 2) {
+      newErrors.firstName = 'First name must be at least 2 characters';
+    }
+
+    // Last Name validation  
+    if (!lastName?.trim()) {
+      newErrors.lastName = 'Last name is required';
+    } else if (lastName.trim().length < 2) {
+      newErrors.lastName = 'Last name must be at least 2 characters';
+    }
+
+    // Email validation
+    if (!email?.trim()) {
+      newErrors.email = 'Email is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      newErrors.email = 'Please enter a valid email address';
+    }
+
+    // Password validation
+    if (!password) {
+      newErrors.password = 'Password is required';
+    } else if (password.length < 6) {
+      newErrors.password = 'Password must be at least 6 characters';
+    }
+
+    // Location validation
+    if (!location?.trim()) {
+      newErrors.location = 'Location is required';
+    }
+
+    // Career Goal validation
+    if (!careerGoal?.trim()) {
+      newErrors.careerGoal = 'Career goal is required';
+    }
+
+    return newErrors;
+  };
+
+  const handleInputChange = (field: string, value: string) => {
+    // Update the specific field
+    switch (field) {
+      case 'firstName':
+        setFirstName(value);
+        break;
+      case 'lastName':
+        setLastName(value);
+        break;
+      case 'email':
+        setEmail(value);
+        break;
+      case 'password':
+        setPassword(value);
+        break;
+      case 'location':
+        setLocation(value);
+        break;
+      case 'careerGoal':
+        setCareerGoal(value);
+        break;
+    }
+    
+    // Clear error when user starts typing
+    if (formErrors[field]) {
+      setFormErrors(prev => ({ ...prev, [field]: '' }));
+    }
+  };
+
+  const handleInputBlur = (field: string) => {
+    setTouched(prev => ({ ...prev, [field]: true }));
+    
+    // Validate single field on blur
+    const errors = validateForm();
+    setFormErrors(prev => ({ ...prev, [field]: errors[field] || '' }));
+  };
+
   const handleSkillAdd = (skill: string) => {
     if (skill && !skills.includes(skill)) {
       setSkills([...skills, skill]);
@@ -97,59 +182,32 @@ export function Signup() {
     }
   };
 
-  const handleGoogleSignUp = async () => {
-    setGoogleLoading(true);
-    
-    try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`
-        }
-      });
-
-      if (error) {
-        showToast({
-          type: 'error',
-          title: 'Google Sign Up Failed',
-          message: error.message
-        });
-      }
-    } catch (err) {
-      console.error('Google sign up error:', err);
-      showToast({
-        type: 'error',
-        title: 'Google Sign Up Error',
-        message: 'An unexpected error occurred. Please try again.'
-      });
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validate all fields
+    const errors = validateForm();
+    setFormErrors(errors);
+    setTouched({
+      firstName: true,
+      lastName: true,
+      email: true,
+      password: true,
+      location: true,
+      careerGoal: true
+    });
+
+    // Don't submit if there are validation errors
+    if (Object.keys(errors).length > 0) {
+      showToast({
+        type: 'error',
+        title: 'Form Validation Error',
+        message: 'Please correct the highlighted fields before submitting.'
+      });
+      return;
+    }
+
     setLoading(true);
-
-    if (password.length < 6) {
-      showToast({
-        type: 'error',
-        title: 'Password Too Short',
-        message: 'Password must be at least 6 characters long'
-      });
-      setLoading(false);
-      return;
-    }
-
-    if (!firstName.trim()) {
-      showToast({
-        type: 'error',
-        title: 'First Name Required',
-        message: 'Please enter your first name'
-      });
-      setLoading(false);
-      return;
-    }
 
     try {
       const { error } = await signUp(email, password, firstName, lastName, location, careerGoal, skills, experienceLevel);
@@ -226,31 +284,16 @@ export function Signup() {
       <div className="relative z-10 mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white/80 backdrop-blur-sm py-8 px-4 shadow-xl sm:rounded-2xl sm:px-10 border border-white/20">
           
-          {/* Google Sign Up Button - MOVED TO TOP */}
+          {/* Required fields notice */}
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-sm text-blue-800">
+              <span className="font-medium">Required fields are marked with</span> <span className="text-red-500">*</span>
+            </p>
+          </div>
+
+          {/* Google Sign Up Button */}
           <div className="mb-6">
-            <button
-              type="button"
-              onClick={handleGoogleSignUp}
-              disabled={googleLoading || loading}
-              className="group relative w-full flex justify-center py-3 px-4 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105 hover:shadow-lg"
-            >
-              {googleLoading ? (
-                <div className="flex items-center">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2"></div>
-                  Signing up with Google...
-                </div>
-              ) : (
-                <div className="flex items-center">
-                  <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                  </svg>
-                  Sign up with Google
-                </div>
-              )}
-            </button>
+            <GoogleSignupButton disabled={loading} />
 
             {/* Divider */}
             <div className="relative mt-6">
@@ -267,92 +310,186 @@ export function Signup() {
             {/* Name Fields */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="firstName" className="block text-sm font-medium text-gray-700">
-                  First name *
+                <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">
+                  First Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="firstName"
                   type="text"
-                  required
                   value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                  onChange={(e) => handleInputChange('firstName', e.target.value)}
+                  onBlur={() => handleInputBlur('firstName')}
+                  className={`mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 transition-colors ${
+                    formErrors.firstName && touched.firstName
+                      ? 'border-red-500 focus:ring-red-500 bg-red-50'
+                      : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                  }`}
                   placeholder="Enter your first name"
+                  disabled={loading}
                 />
+                {formErrors.firstName && touched.firstName && (
+                  <p className="mt-1 text-sm text-red-600 flex items-center">
+                    <AlertCircle className="w-4 h-4 mr-1" />
+                    {formErrors.firstName}
+                  </p>
+                )}
               </div>
 
               <div>
-                <label htmlFor="lastName" className="block text-sm font-medium text-gray-700">
-                  Last name
+                <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1">
+                  Last Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="lastName"
                   type="text"
                   value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                  onChange={(e) => handleInputChange('lastName', e.target.value)}
+                  onBlur={() => handleInputBlur('lastName')}
+                  className={`mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 transition-colors ${
+                    formErrors.lastName && touched.lastName
+                      ? 'border-red-500 focus:ring-red-500 bg-red-50'
+                      : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                  }`}
                   placeholder="Enter your last name"
+                  disabled={loading}
                 />
+                {formErrors.lastName && touched.lastName && (
+                  <p className="mt-1 text-sm text-red-600 flex items-center">
+                    <AlertCircle className="w-4 h-4 mr-1" />
+                    {formErrors.lastName}
+                  </p>
+                )}
               </div>
             </div>
 
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email address
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+                Email Address <span className="text-red-500">*</span>
               </label>
               <input
                 id="email"
                 type="email"
-                required
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
-                placeholder="Enter your email"
+                onChange={(e) => handleInputChange('email', e.target.value)}
+                onBlur={() => handleInputBlur('email')}
+                className={`mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 transition-colors ${
+                  formErrors.email && touched.email
+                    ? 'border-red-500 focus:ring-red-500 bg-red-50'
+                    : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                }`}
+                placeholder="Enter your email address"
+                disabled={loading}
               />
+              {formErrors.email && touched.email && (
+                <p className="mt-1 text-sm text-red-600 flex items-center">
+                  <AlertCircle className="w-4 h-4 mr-1" />
+                  {formErrors.email}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+                Password <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => handleInputChange('password', e.target.value)}
+                  onBlur={() => handleInputBlur('password')}
+                  className={`mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 transition-colors pr-10 ${
+                    formErrors.password && touched.password
+                      ? 'border-red-500 focus:ring-red-500 bg-red-50'
+                      : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                  }`}
+                  placeholder="Create a secure password"
+                  disabled={loading}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              {formErrors.password && touched.password && (
+                <p className="mt-1 text-sm text-red-600 flex items-center">
+                  <AlertCircle className="w-4 h-4 mr-1" />
+                  {formErrors.password}
+                </p>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                Password must be at least 6 characters long
+              </p>
             </div>
 
             {/* Location Selector */}
             <div>
-              <label htmlFor="location" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">
                 <div className="flex items-center space-x-2">
                   <Globe className="h-4 w-4 text-blue-600" />
-                  <span>Where are you based?</span>
+                  <span>Where are you based? <span className="text-red-500">*</span></span>
                 </div>
               </label>
               <select
                 id="location"
-                required
                 value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                onChange={(e) => handleInputChange('location', e.target.value)}
+                onBlur={() => handleInputBlur('location')}
+                className={`mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 transition-colors ${
+                  formErrors.location && touched.location
+                    ? 'border-red-500 focus:ring-red-500 bg-red-50'
+                    : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                }`}
+                disabled={loading}
               >
                 <option value="">Select your country</option>
                 {countries.map((country) => (
                   <option key={country} value={country}>{country}</option>
                 ))}
               </select>
+              {formErrors.location && touched.location && (
+                <p className="mt-1 text-sm text-red-600 flex items-center">
+                  <AlertCircle className="w-4 h-4 mr-1" />
+                  {formErrors.location}
+                </p>
+              )}
             </div>
 
             {/* Career Goal Selector */}
             <div>
-              <label htmlFor="careerGoal" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="careerGoal" className="block text-sm font-medium text-gray-700 mb-1">
                 <div className="flex items-center space-x-2">
                   <Target className="h-4 w-4 text-blue-600" />
-                  <span>What's your career goal?</span>
+                  <span>What's your career goal? <span className="text-red-500">*</span></span>
                 </div>
               </label>
               <select
                 id="careerGoal"
-                required
                 value={careerGoal}
-                onChange={(e) => setCareerGoal(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                onChange={(e) => handleInputChange('careerGoal', e.target.value)}
+                onBlur={() => handleInputBlur('careerGoal')}
+                className={`mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 transition-colors ${
+                  formErrors.careerGoal && touched.careerGoal
+                    ? 'border-red-500 focus:ring-red-500 bg-red-50'
+                    : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                }`}
+                disabled={loading}
               >
                 <option value="">Select your goal</option>
                 {careerGoals.map((goal) => (
                   <option key={goal} value={goal}>{goal}</option>
                 ))}
               </select>
+              {formErrors.careerGoal && touched.careerGoal && (
+                <p className="mt-1 text-sm text-red-600 flex items-center">
+                  <AlertCircle className="w-4 h-4 mr-1" />
+                  {formErrors.careerGoal}
+                </p>
+              )}
             </div>
 
             {/* Experience Level Selector */}
@@ -368,6 +505,7 @@ export function Signup() {
                 value={experienceLevel}
                 onChange={(e) => setExperienceLevel(e.target.value)}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+                disabled={loading}
               >
                 <option value="">Select your experience level</option>
                 {experienceLevels.map((level) => (
@@ -398,6 +536,7 @@ export function Signup() {
                         type="button"
                         onClick={() => handleSkillRemove(skill)}
                         className="text-blue-600 hover:text-blue-800"
+                        disabled={loading}
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -415,11 +554,12 @@ export function Signup() {
                   onKeyPress={handleNewSkillKeyPress}
                   placeholder="Add a skill..."
                   className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  disabled={loading}
                 />
                 <button
                   type="button"
                   onClick={handleNewSkillAdd}
-                  disabled={!newSkill.trim() || skills.includes(newSkill.trim())}
+                  disabled={!newSkill.trim() || skills.includes(newSkill.trim()) || loading}
                   className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
                 >
                   <Plus className="h-4 w-4" />
@@ -436,7 +576,7 @@ export function Signup() {
                       key={skill}
                       type="button"
                       onClick={() => handleSkillAdd(skill)}
-                      disabled={skills.includes(skill)}
+                      disabled={skills.includes(skill) || loading}
                       className={`px-3 py-1 rounded-full text-sm border transition-colors ${
                         skills.includes(skill)
                           ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
@@ -448,37 +588,6 @@ export function Signup() {
                   ))}
                 </div>
               </div>
-            </div>
-
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <div className="mt-1 relative">
-                <input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
-                  placeholder="Create a password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-5 w-5 text-gray-400" />
-                  ) : (
-                    <Eye className="h-5 w-5 text-gray-400" />
-                  )}
-                </button>
-              </div>
-              <p className="mt-1 text-sm text-gray-600">
-                Must be at least 6 characters long
-              </p>
             </div>
 
             <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-lg border border-blue-200">
@@ -508,24 +617,24 @@ export function Signup() {
 
             <button
               type="submit"
-              disabled={loading || googleLoading}
-              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105 hover:shadow-lg"
+              disabled={loading || Object.keys(validateForm()).length > 0}
+              className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white transition-all duration-200 ${
+                loading || Object.keys(validateForm()).length > 0
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transform hover:scale-105'
+              }`}
             >
-              {loading ? 'Creating account...' : 'Create account'}
+              {loading ? (
+                <div className="flex items-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Creating Account...
+                </div>
+              ) : (
+                'Create Account'
+              )}
             </button>
           </form>
-{/* Divider */}
-<div className="relative my-6">
-  <div className="absolute inset-0 flex items-center">
-    <div className="w-full border-t border-gray-300" />
-  </div>
-  <div className="relative flex justify-center text-sm">
-    <span className="px-2 bg-white text-gray-500">Or continue with</span>
-  </div>
-</div>
 
-{/* Google Signup Button */}
-<GoogleSignupButton disabled={loading} />
           <div className="mt-6">
             <div className="text-center">
               <span className="text-gray-600">Already have an account? </span>

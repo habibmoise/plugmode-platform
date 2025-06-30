@@ -74,7 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
 
         // Log user events for automation (clean messages)
-        if (event === 'SIGNED_UP' && session?.user) {
+        if (event.toString() === 'SIGNED_UP' && session?.user) {
           await logUserEvent(session.user.id, 'user_signup', {
             email: session.user.email,
             timestamp: new Date().toISOString()

@@ -14,6 +14,45 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Helper function to clean error messages - remove backend details
+const sanitizeErrorMessage = (message: string): string => {
+  return message
+    .replace(/\[mxiqidkcthfkrtoptcet\]/g, 'PlugMode')
+    .replace(/supabase/gi, 'our system')
+    .replace(/postgres/gi, 'database')
+    .replace(/RLS/gi, 'security')
+    .replace(/JWT/gi, 'authentication')
+    .replace(/function.*?\(\)/gi, 'system process')
+    .replace(/schema.*?error/gi, 'data error')
+    .replace(/constraint.*?violation/gi, 'data validation error')
+    .replace(/duplicate key/gi, 'this information already exists')
+    .replace(/connection.*?refused/gi, 'connection issue')
+    .replace(/timeout/gi, 'request took too long')
+    .replace(/invalid.*?api.*?key/gi, 'authentication issue');
+};
+
+// Helper function to show toast or fallback to alert
+const showUserMessage = (type: 'success' | 'error', title: string, message: string) => {
+  try {
+    // Try to use toast if available
+    if (typeof window !== 'undefined' && (window as any).showToast) {
+      (window as any).showToast({
+        type,
+        title: sanitizeErrorMessage(title),
+        message: sanitizeErrorMessage(message)
+      });
+    } else {
+      // Fallback to enhanced alert
+      const emoji = type === 'success' ? '✅' : '❌';
+      alert(`${emoji} ${sanitizeErrorMessage(title)}\n\n${sanitizeErrorMessage(message)}`);
+    }
+  } catch (toastError) {
+    // Final fallback
+    const emoji = type === 'success' ? '✅' : '❌';
+    alert(`${emoji} ${sanitizeErrorMessage(title)}`);
+  }
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -34,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(session?.user ?? null);
         setLoading(false);
 
-        // Log user events for automation
+        // Log user events for automation (clean messages)
         if (event === 'SIGNED_UP' && session?.user) {
           await logUserEvent(session.user.id, 'user_signup', {
             email: session.user.email,
@@ -56,46 +95,146 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (error) {
       console.error('Error logging user event:', error);
+      // Don't show user-facing errors for logging - it's background operation
     }
   };
 
   const signUp = async (email: string, password: string, firstName: string, lastName: string, location: string, careerGoal: string, skills: string[] = [], experienceLevel?: string) => {
-    const fullName = lastName ? `${firstName} ${lastName}` : firstName;
-    
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          firstName: firstName,
-          lastName: lastName,
-          name: fullName
-        }
-      }
-    });
-
-    if (data.user && !error) {
-      // Create user profile with first name, last name, location and career goal
-      await supabase.from('users').insert({
-        id: data.user.id,
-        email: data.user.email!,
-        name: fullName,
-        first_name: firstName,
-        last_name: lastName,
-        location: location,
-        skills: skills,
-        experience_level: experienceLevel,
-        automation_preferences: {
-          career_goal: careerGoal
+    try {
+      const fullName = lastName ? `${firstName} ${lastName}` : firstName;
+      
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            firstName: firstName,
+            lastName: lastName,
+            name: fullName
+          }
         }
       });
-    }
 
-    return { data, error };
+      if (error) {
+        // Clean error messages for users
+        let userFriendlyMessage = 'Something went wrong during signup.';
+        
+        if (error.message.includes('email')) {
+          userFriendlyMessage = 'This email is already registered. Try logging in instead.';
+        } else if (error.message.includes('password')) {
+          userFriendlyMessage = 'Password must be at least 6 characters long.';
+        } else if (error.message.includes('rate limit')) {
+          userFriendlyMessage = 'Too many signup attempts. Please wait a few minutes and try again.';
+        } else if (error.message.includes('invalid')) {
+          userFriendlyMessage = 'Please check your email format and password.';
+        }
+        
+        return { data: null, error: { message: userFriendlyMessage } };
+      }
+
+      if (data.user) {
+        try {
+          // Create user profile with clean error handling
+          const { error: profileError } = await supabase.from('users').insert({
+            id: data.user.id,
+            email: data.user.email!,
+            name: fullName,
+            first_name: firstName,
+            last_name: lastName,
+            location: location,
+            skills: skills,
+            experience_level: experienceLevel,
+            automation_preferences: {
+              career_goal: careerGoal
+            }
+          });
+
+          if (profileError) {
+            console.error('Profile creation error:', profileError);
+            // Don't expose database errors to users
+            return { 
+              data: null, 
+              error: { message: 'Account created but profile setup incomplete. Please contact support.' }
+            };
+          }
+
+          // Success! Show welcome message
+          showUserMessage(
+            'success',
+            `Welcome to PlugMode, ${firstName}! 🎉`,
+            'Your account is ready! Let\'s start building your global career.'
+          );
+
+          return { data, error: null };
+        } catch (profileError) {
+          console.error('Profile creation failed:', profileError);
+          return { 
+            data: null, 
+            error: { message: 'Account created but profile setup failed. Please contact support.' }
+          };
+        }
+      }
+
+      return { data: null, error: { message: 'Account creation failed. Please try again.' } };
+      
+    } catch (error) {
+      console.error('Signup error:', error);
+      return { 
+        data: null, 
+        error: { message: 'Signup failed. Please check your connection and try again.' }
+      };
+    }
   };
 
   const signIn = async (email: string, password: string) => {
-    return await supabase.auth.signInWithPassword({ email, password });
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        // Clean error messages for users
+        let userFriendlyMessage = 'Login failed. Please check your credentials.';
+        
+        if (error.message.includes('Invalid login credentials')) {
+          userFriendlyMessage = 'Incorrect email or password. Please try again.';
+        } else if (error.message.includes('Email not confirmed')) {
+          userFriendlyMessage = 'Please check your email and confirm your account first.';
+        } else if (error.message.includes('rate limit')) {
+          userFriendlyMessage = 'Too many login attempts. Please wait a few minutes.';
+        } else if (error.message.includes('invalid')) {
+          userFriendlyMessage = 'Please check your email and password format.';
+        }
+        
+        return { data: null, error: { message: userFriendlyMessage } };
+      }
+
+      if (data.user) {
+        // Welcome back message
+        const userName = data.user.user_metadata?.firstName || 
+                        data.user.user_metadata?.name || 
+                        data.user.email?.split('@')[0] || 
+                        'there';
+        
+        showUserMessage(
+          'success',
+          `Welcome back, ${userName}! 👋`,
+          'Ready to discover amazing opportunities today?'
+        );
+        
+        return { data, error: null };
+      }
+
+      return { data: null, error: { message: 'Login failed. Please try again.' } };
+      
+    } catch (error) {
+      console.error('Login error:', error);
+      return { 
+        data: null, 
+        error: { message: 'Login failed. Please check your connection and try again.' }
+      };
+    }
   };
 
   const signOut = async () => {
@@ -103,7 +242,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       
-      // Enhanced success message with user name
+      // Get user's name for personalized message
       const userName = user?.user_metadata?.firstName || 
                        user?.user_metadata?.name || 
                        user?.email?.split('@')[0] || 
@@ -114,23 +253,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(null);
       setLoading(false);
       
-      // Show enhanced goodbye message
-      try {
-        // Try to use toast if available (check if showToast exists in window context)
-        if (typeof window !== 'undefined' && (window as any).showToast) {
-          (window as any).showToast({
-            type: 'success',
-            title: `See you later, ${userName}! 👋`,
-            message: 'You have been securely logged out. Thanks for using PlugMode!'
-          });
-        } else {
-          // Fallback to enhanced alert
-          alert(`👋 Goodbye ${userName}! You have been logged out successfully.\n\nThanks for using PlugMode - we can't wait to see you again!`);
-        }
-      } catch (toastError) {
-        // Final fallback
-        alert(`✅ Successfully logged out! See you soon, ${userName}!`);
-      }
+      // Show enhanced goodbye message (NO project IDs or backend details)
+      showUserMessage(
+        'success',
+        `See you later, ${userName}! 👋`,
+        'You have been securely logged out. Thanks for using PlugMode!'
+      );
       
       // Redirect to home page with a slight delay to show message
       setTimeout(() => {
@@ -140,24 +268,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error signing out:', error);
       
-      // Enhanced error message
+      // Enhanced error message (NO technical details)
       const userName = user?.user_metadata?.firstName || 
                        user?.user_metadata?.name || 
                        'there';
       
-      try {
-        if (typeof window !== 'undefined' && (window as any).showToast) {
-          (window as any).showToast({
-            type: 'error',
-            title: 'Logout Issue 😕',
-            message: 'Had trouble logging you out completely. Please close your browser to ensure you\'re fully signed out.'
-          });
-        } else {
-          alert(`❌ Hi ${userName}, we had trouble logging you out completely.\n\nFor your security, please close your browser window.`);
-        }
-      } catch (toastError) {
-        alert('❌ Had trouble logging out. Please close your browser for security.');
-      }
+      showUserMessage(
+        'error',
+        'Logout Issue',
+        `Hi ${userName}, we had trouble logging you out completely. For your security, please close your browser window.`
+      );
     }
   };
 

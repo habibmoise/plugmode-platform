@@ -1,23 +1,27 @@
 // src/lib/supabase.ts
-// Fixed configuration to handle OAuth properly
+// Fixed version with explicit keys to solve production deployment issues
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Hardcoded values instead of environment variables (fixes Netlify/Vite production issues)
+const supabaseUrl = 'https://mxiqidkcthfkrtoptcet.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14aXFpZGtjdGhma3J0b3B0Y2V0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk0ODEwODIsImV4cCI6MjA2NTA1NzA4Mn0.pYFl0NqpPaKV_w9dlGxtjI_A7pZdE64xGXGEVFZwNcA';
+
+// Debug logging to verify correct values are being used
+console.log('🔍 Supabase Client Configuration:', {
+  url: supabaseUrl,
+  keyPrefix: supabaseAnonKey.substring(0, 50) + '...',
+  keyLength: supabaseAnonKey.length,
+  timestamp: new Date().toISOString()
+});
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    // Disable automatic token refresh on startup
     autoRefreshToken: true,
-    // Don't persist session in localStorage (causes 401 on page reload)
     persistSession: true,
-    // Detect session from URL on OAuth callbacks
     detectSessionInUrl: true,
-    // Use a more reliable storage method
     storage: typeof window !== 'undefined' ? window.localStorage : undefined,
   },
-  // Add retry logic for network requests
   global: {
     headers: {
       'x-application-name': 'plugmode-platform',
@@ -82,6 +86,29 @@ export type Database = {
           avatar_url?: string | null;
           created_at?: string;
           updated_at?: string;
+        };
+      };
+      user_events: {
+        Row: {
+          id: string;
+          user_id: string;
+          event_type: string;
+          event_data: any | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          event_type: string;
+          event_data?: any | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          event_type?: string;
+          event_data?: any | null;
+          created_at?: string;
         };
       };
     };

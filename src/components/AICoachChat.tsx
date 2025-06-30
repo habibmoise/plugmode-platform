@@ -1,105 +1,140 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { generateCareerCoaching, ChatMessage } from '../lib/ai-coach';
-import { useAuth } from '../contexts/AuthContext';
-import { useToast } from '../contexts/ToastContext';
+// src/components/AICoachChat.tsx
+import React, { useState, useRef, useEffect } from 'react';
 
-// Simple icon components (instead of lucide-react to avoid import issues)
-const MicIcon = () => (
-  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-  </svg>
-);
-
-const MicOffIcon = () => (
-  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 5.586A2 2 0 015 7v6a7 7 0 0011.95 4.95M5.586 5.586L19.414 19.414M12 18v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-  </svg>
-);
-
-const VolumeIcon = () => (
-  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M11 5L6 9H2v6h4l5 4V5z" />
+// Define our simple icon components to avoid Lucide import issues
+const MessageCircleIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
   </svg>
 );
 
 const SendIcon = () => (
-  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <line x1="22" y1="2" x2="11" y2="13"/>
+    <polygon points="22,2 15,22 11,13 2,9"/>
   </svg>
 );
 
-const LoaderIcon = () => (
-  <svg className="h-4 w-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+const MicIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+    <line x1="12" y1="19" x2="12" y2="23"/>
+    <line x1="8" y1="23" x2="16" y2="23"/>
   </svg>
 );
 
-// Voice service - simplified version that doesn't require external import
-const voiceService = {
-  async textToSpeech(text: string): Promise<string | null> {
-    try {
-      // Check if ElevenLabs is available in environment
-      const apiKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
-      const voiceId = import.meta.env.VITE_ELEVENLABS_VOICE_ID || 'uYXf8XasLslADfZ2MB4u';
+const MicOffIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <line x1="2" y1="2" x2="22" y2="22"/>
+    <path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/>
+    <path d="M12 19a7 7 0 0 1-7-7v-2"/>
+    <path d="M12 1a3 3 0 0 0-3 3v4l6 6V4a3 3 0 0 0-3-3z"/>
+    <line x1="12" y1="19" x2="12" y2="23"/>
+    <line x1="8" y1="23" x2="16" y2="23"/>
+  </svg>
+);
+
+const Volume2Icon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+  </svg>
+);
+
+const VolumeXIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
+    <line x1="23" y1="9" x2="17" y2="15"/>
+    <line x1="17" y1="9" x2="23" y2="15"/>
+  </svg>
+);
+
+// Message type interface
+interface Message {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+// Chat service function that works with your existing backend
+const chatWithAI = async (message: string, userId: string) => {
+  try {
+    const response = await fetch('/api/ai/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        message,
+        userId,
+        conversationId: `chat-${Date.now()}`
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
       
-      if (!apiKey) {
-        console.log('ElevenLabs API key not available');
-        return null;
+      // Handle rate limiting specifically
+      if (response.status === 429) {
+        throw new Error(`Monthly limit reached: ${errorData.used}/${errorData.limit} messages used this month. Upgrade to ${errorData.tier === 'starter' ? 'Professional' : 'Career OS'} for more messages.`);
       }
-
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'audio/mpeg',
-          'Content-Type': 'application/json',
-          'xi-api-key': apiKey
-        },
-        body: JSON.stringify({
-          text: text.substring(0, 500), // Limit length
-          model_id: 'eleven_monolingual_v1',
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75
-          }
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`ElevenLabs API error: ${response.status}`);
-      }
-
-      const audioBuffer = await response.arrayBuffer();
-      const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
-      return URL.createObjectURL(audioBlob);
-    } catch (error) {
-      console.error('Text-to-speech failed:', error);
-      return null;
+      
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
+
+    const data = await response.json();
+    return { 
+      message: data.response || 'I apologize, but I encountered an issue. Please try again.',
+      remainingUses: data.remainingUses,
+      tier: data.tier
+    };
+  } catch (error) {
+    console.error('Chat API error:', error);
+    throw error; // Re-throw to handle in component
   }
 };
 
-interface AICoachChatProps {
-  className?: string;
-}
-
-const AICoachChat: React.FC<AICoachChatProps> = ({ className = '' }) => {
-  // Existing state
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [currentMessage, setCurrentMessage] = useState('');
+const AICoachChat: React.FC = () => {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [remainingUses, setRemainingUses] = useState<number>(-1);
-  const [userTier, setUserTier] = useState<string>('starter');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  
-  // New voice state
   const [isRecording, setIsRecording] = useState(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  
-  const { user } = useAuth();
-  const { showToast } = useToast();
+  const [isPlaying, setIsPlaying] = useState<{[key: number]: boolean}>({});
+  const [userTier, setUserTier] = useState<string>('career_os'); // Will be updated from backend
+  const [remainingUses, setRemainingUses] = useState<number>(-1);
+  const [userId] = useState('demo-user-123'); // Replace with actual user ID from auth
+  const recognitionRef = useRef<any>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom
+  // Initialize speech recognition
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
+      const recognition = new (window as any).webkitSpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInput(transcript);
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        setIsRecording(false);
+        alert('Voice recognition error. Please check microphone permissions.');
+      };
+
+      recognitionRef.current = recognition;
+    }
+  }, []);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -108,270 +143,200 @@ const AICoachChat: React.FC<AICoachChatProps> = ({ className = '' }) => {
     scrollToBottom();
   }, [messages]);
 
-  // Add user tier loading effect - Simple demo account detection
-  useEffect(() => {
-    if (user?.email) {
-      // For demo accounts, always set to career_os
-      if (user.email.includes('demo') || user.email.includes('judge')) {
-        setUserTier('career_os');
-      } else {
-        // For other users, you could check their actual subscription
-        // For now, default to career_os for testing
-        setUserTier('career_os');
-      }
+  const toggleRecording = () => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition not supported in this browser. Please use Chrome or Edge.');
+      return;
     }
-  }, [user]);
 
-  // Add welcome message
-  useEffect(() => {
-    if (messages.length === 0) {
-      setMessages([{
-        id: 'welcome',
-        role: 'assistant',
-        content: "Hello! I'm your AI career coach. I specialize in helping professionals in underserved regions access global remote opportunities. How can I help you today?",
-        timestamp: new Date()
-      }]);
+    if (isRecording) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+    } else {
+      recognitionRef.current.start();
+      setIsRecording(true);
     }
-  }, [messages.length]);
+  };
 
-  // Voice recording using Web Speech API
-  const startVoiceRecording = async () => {
+  const playAudioResponse = async (text: string, messageId: number) => {
     try {
-      if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        showToast({
-          type: 'error',
-          title: 'Speech Recognition Not Supported',
-          message: 'Please use a supported browser or type your message.'
-        });
-        return;
+      setIsPlaying(prev => ({ ...prev, [messageId]: true }));
+
+      const response = await fetch('/api/voice/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: text,
+          voiceId: '9BWtsMINqrJLrRacOk9x' // Aria voice from your API response
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('TTS API Error:', response.status, errorText);
+        throw new Error(`TTS API error: ${response.status}`);
       }
 
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
 
-      recognition.onstart = () => {
-        setIsRecording(true);
+      audio.onended = () => {
+        setIsPlaying(prev => ({ ...prev, [messageId]: false }));
+        URL.revokeObjectURL(audioUrl);
       };
 
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setCurrentMessage(transcript);
-        setIsRecording(false);
+      audio.onerror = (error) => {
+        console.error('Audio playback error:', error);
+        setIsPlaying(prev => ({ ...prev, [messageId]: false }));
+        URL.revokeObjectURL(audioUrl);
+        alert('Audio playback failed. Please try again.');
       };
 
-      recognition.onerror = (event: any) => {
-        console.error('Speech recognition error:', event.error);
-        setIsRecording(false);
-        showToast({
-          type: 'error',
-          title: 'Voice Recognition Failed',
-          message: 'Please try again or type your message.'
-        });
-      };
-
-      recognition.onend = () => {
-        setIsRecording(false);
-      };
-
-      recognition.start();
+      await audio.play();
     } catch (error) {
-      console.error('Error starting voice recording:', error);
-      showToast({
-        type: 'error',
-        title: 'Microphone Access Failed',
-        message: 'Please check your microphone permissions.'
-      });
+      console.error('Text-to-speech failed:', error);
+      setIsPlaying(prev => ({ ...prev, [messageId]: false }));
+      alert('Voice generation failed. Please try again.');
     }
   };
 
-  const stopVoiceRecording = () => {
-    setIsRecording(false);
-  };
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
 
-  // Play AI response as audio
-  const playAudioResponse = async (text: string) => {
-    try {
-      setIsPlayingAudio(true);
-      const audioUrl = await voiceService.textToSpeech(text);
-      
-      if (audioUrl && audioRef.current) {
-        audioRef.current.src = audioUrl;
-        await audioRef.current.play();
-        
-        audioRef.current.onended = () => {
-          setIsPlayingAudio(false);
-          URL.revokeObjectURL(audioUrl); // Clean up
-        };
-      } else {
-        setIsPlayingAudio(false);
-        showToast({
-          type: 'info',
-          title: 'Audio Not Available',
-          message: 'Voice response could not be generated.'
-        });
-      }
-    } catch (error) {
-      console.error('Error playing audio:', error);
-      setIsPlayingAudio(false);
-      showToast({
-        type: 'error',
-        title: 'Audio Playback Failed',
-        message: 'Could not play audio response.'
-      });
-    }
-  };
-
-  const handleSendMessage = async () => {
-    if (!currentMessage.trim() || !user?.id || isLoading) return;
-
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+    const userMessage: Message = {
+      id: Date.now(),
       role: 'user',
-      content: currentMessage.trim(),
-      timestamp: new Date()
+      content: input.trim(),
+      timestamp: new Date().toISOString()
     };
 
     setMessages(prev => [...prev, userMessage]);
-    setCurrentMessage('');
+    setInput('');
     setIsLoading(true);
 
     try {
-      const result = await generateCareerCoaching(currentMessage.trim(), user.id);
+      const response = await chatWithAI(input.trim(), userId);
       
-      const aiMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+      const aiMessage: Message = {
+        id: Date.now() + 1,
         role: 'assistant',
-        content: result.response,
-        timestamp: new Date()
+        content: response.message,
+        timestamp: new Date().toISOString()
       };
 
       setMessages(prev => [...prev, aiMessage]);
-      setRemainingUses(result.remainingUses);
-      setUserTier(result.tier);
+      
+      // Update usage tracking
+      setRemainingUses(response.remainingUses);
+      setUserTier(response.tier);
 
-      // Auto-play voice response for Career OS tier users
-      if (userTier === 'career_os') {
+      // Auto-play audio for Career OS users
+      if (response.tier === 'career_os') {
         setTimeout(() => {
-          playAudioResponse(result.response);
+          playAudioResponse(response.message, aiMessage.id);
         }, 500);
-      }
-
-      if (result.remainingUses === 0 && result.tier !== 'career_os') {
-        showToast({
-          type: 'warning',
-          title: 'Monthly Limit Reached',
-          message: 'You have reached your monthly AI coaching limit. Upgrade for unlimited access!'
-        });
       }
 
     } catch (error) {
       console.error('Chat error:', error);
-      showToast({
-        type: 'error',
-        title: 'Chat Error',
-        message: error instanceof Error ? error.message : 'Failed to get AI response'
-      });
-      
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+      const errorMessage: Message = {
+        id: Date.now() + 1,
         role: 'assistant',
-        content: "I apologize, but I'm having trouble processing your request right now. Please try again in a moment.",
-        timestamp: new Date()
+        content: error instanceof Error ? error.message : 'I apologize, but I encountered an error. Please try again.',
+        timestamp: new Date().toISOString()
       };
-      
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
-
-  if (!user) {
-    return (
-      <div className={`flex items-center justify-center p-8 ${className}`}>
-        <p className="text-gray-600">Please log in to access AI career coaching.</p>
-      </div>
-    );
-  }
+  const isVoiceEnabled = userTier === 'career_os';
 
   return (
-    <div className={`flex flex-col h-full max-h-[600px] bg-white rounded-lg border ${className}`}>
+    <div className="flex flex-col h-[600px] max-w-4xl mx-auto bg-white rounded-lg shadow-lg border border-gray-200">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b bg-gray-50 rounded-t-lg">
-        <div>
-          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-            AI Career Coach
-            {isPlayingAudio && (
-              <span className="text-sm text-blue-600 flex items-center gap-1">
-                <VolumeIcon />
-                Speaking...
-              </span>
-            )}
-          </h3>
-          <p className="text-sm text-gray-600">
-            Get personalized career advice
-            {userTier === 'career_os' && (
-              <span className="text-blue-600 ml-1">• Voice enabled</span>
-            )}
-          </p>
+      <div className="flex items-center justify-between p-4 bg-purple-600 text-white rounded-t-lg">
+        <div className="flex items-center gap-2">
+          <MessageCircleIcon />
+          <h3 className="font-semibold">AI Career Coach</h3>
         </div>
-        {remainingUses !== -1 && (
-          <div className="text-right">
-            <p className="text-xs text-gray-500">Remaining this month</p>
-            <p className="font-medium text-blue-600">{remainingUses}</p>
+        {isVoiceEnabled && (
+          <div className="text-sm text-purple-200 flex items-center gap-2">
+            🎤 Voice enabled
+            {remainingUses >= 0 && (
+              <span className="text-xs">({remainingUses} messages left)</span>
+            )}
           </div>
         )}
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.length === 0 && (
+          <div className="text-center text-gray-500 mt-8">
+            <MessageCircleIcon />
+            <p className="text-lg font-medium mb-2">Welcome to your AI Career Coach!</p>
+            <p className="text-sm">Ask me anything about your career, job search, or professional development.</p>
+            {isVoiceEnabled && (
+              <p className="text-sm text-purple-600 mt-2">🎤 You can speak or type your questions</p>
+            )}
+          </div>
+        )}
+
         {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`max-w-[80%] p-3 rounded-lg ${
-                message.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-900'
-              }`}
-            >
-              <p className="whitespace-pre-wrap">{message.content}</p>
-              {message.role === 'assistant' && userTier === 'career_os' && (
-                <button
-                  onClick={() => playAudioResponse(message.content)}
-                  className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                  disabled={isPlayingAudio}
-                >
-                  <VolumeIcon />
-                  {isPlayingAudio ? 'Playing...' : 'Play Audio'}
-                </button>
+          <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[80%] rounded-lg p-3 ${
+              message.role === 'user' 
+                ? 'bg-purple-600 text-white' 
+                : 'bg-gray-100 text-gray-800'
+            }`}>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+              
+              {/* Audio controls for AI messages */}
+              {message.role === 'assistant' && isVoiceEnabled && (
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={() => playAudioResponse(message.content, message.id)}
+                    disabled={isPlaying[message.id]}
+                    className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800 disabled:opacity-50"
+                  >
+                    {isPlaying[message.id] ? (
+                      <>
+                        <VolumeXIcon />
+                        Playing...
+                      </>
+                    ) : (
+                      <>
+                        <Volume2Icon />
+                        Play Audio
+                      </>
+                    )}
+                  </button>
+                </div>
               )}
-              <p className="text-xs mt-1 opacity-70">
-                {message.timestamp.toLocaleTimeString()}
-              </p>
+              
+              <div className="text-xs opacity-70 mt-1">
+                {new Date(message.timestamp).toLocaleTimeString()}
+              </div>
             </div>
           </div>
         ))}
-        
+
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-gray-100 p-3 rounded-lg">
-              <div className="flex space-x-1">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+            <div className="bg-gray-100 rounded-lg p-3 max-w-[80%]">
+              <div className="flex items-center gap-2">
+                <div className="flex space-x-1">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                </div>
+                <span className="text-sm text-gray-600">AI is thinking...</span>
               </div>
             </div>
           </div>
@@ -380,99 +345,62 @@ const AICoachChat: React.FC<AICoachChatProps> = ({ className = '' }) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div className="p-4 border-t">
-        {remainingUses === 0 && userTier !== 'career_os' ? (
-          <div className="text-center py-4">
-            <p className="text-gray-600 mb-2">Monthly limit reached</p>
-            <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-              Upgrade for Unlimited Access
-            </button>
+      {/* Input Form */}
+      <form onSubmit={handleSubmit} className="p-4 border-t border-gray-200">
+        <div className="flex gap-2">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={isVoiceEnabled ? "Type your message or use the microphone..." : "Type your message..."}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              disabled={isLoading}
+            />
           </div>
-        ) : (
-          <div className="space-y-2">
-            <div className="flex space-x-2">
-              <div className="flex-1 relative">
-                <textarea
-                  value={currentMessage}
-                  onChange={(e) => setCurrentMessage(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder={isRecording ? "Listening..." : "Ask me about your career goals, remote work strategies, job applications..."}
-                  className={`w-full p-2 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    isRecording ? 'bg-red-50 border-red-300' : 'border-gray-300'
-                  }`}
-                  rows={2}
-                  disabled={isLoading || isRecording}
-                />
-                {isRecording && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-red-50 bg-opacity-90 rounded-lg">
-                    <div className="flex items-center gap-2 text-red-600">
-                      <div className="h-2 w-2 bg-red-500 rounded-full animate-pulse"></div>
-                      <span className="text-sm font-medium">Listening...</span>
-                    </div>
+
+          {/* Voice Input Button - Only for Career OS */}
+          {isVoiceEnabled && (
+            <button
+              type="button"
+              onClick={toggleRecording}
+              className={`px-4 py-2 rounded-lg transition-colors ${
+                isRecording
+                  ? 'bg-red-500 hover:bg-red-600 text-white'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+              title={isRecording ? 'Stop recording' : 'Start voice input'}
+            >
+              {isRecording ? (
+                <div className="flex items-center gap-1">
+                  <MicOffIcon />
+                  <div className="flex space-x-1">
+                    <div className="w-1 h-1 bg-white rounded-full animate-pulse"></div>
+                    <div className="w-1 h-1 bg-white rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
+                    <div className="w-1 h-1 bg-white rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
                   </div>
-                )}
-              </div>
-              
-              {/* Voice Button - Only show for Career OS users */}
-              {userTier === 'career_os' && (
-                <button
-                  onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
-                  className={`p-2 rounded-lg transition-colors ${
-                    isRecording 
-                      ? 'bg-red-500 hover:bg-red-600 text-white' 
-                      : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                  }`}
-                  disabled={isLoading}
-                  title={isRecording ? "Stop recording" : "Start voice input"}
-                >
-                  {isRecording ? <MicOffIcon /> : <MicIcon />}
-                </button>
-              )}
-
-              <button
-                onClick={handleSendMessage}
-                disabled={!currentMessage.trim() || isLoading || isRecording}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-              >
-                {isLoading ? (
-                  <>
-                    <LoaderIcon />
-                    Sending...
-                  </>
-                ) : (
-                  <>
-                    <SendIcon />
-                    Send
-                  </>
-                )}
-              </button>
-            </div>
-            
-            {/* Voice indicator */}
-            {isRecording && (
-              <div className="text-sm text-red-600 flex items-center gap-2">
-                <div className="flex space-x-1">
-                  <div className="h-2 w-2 bg-red-500 rounded-full animate-bounce"></div>
-                  <div className="h-2 w-2 bg-red-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                  <div className="h-2 w-2 bg-red-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
                 </div>
-                <span>Speak now... Click the microphone again to stop</span>
-              </div>
-            )}
+              ) : (
+                <MicIcon />
+              )}
+            </button>
+          )}
 
-            {/* Voice features promotion for non-Career OS users */}
-            {userTier !== 'career_os' && (
-              <div className="text-xs text-gray-500 text-center">
-                💡 Upgrade to Career OS for voice conversations and unlimited AI coaching
-              </div>
-            )}
+          <button
+            type="submit"
+            disabled={!input.trim() || isLoading}
+            className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <SendIcon />
+          </button>
+        </div>
+
+        {isRecording && (
+          <div className="mt-2 text-center">
+            <p className="text-sm text-red-600 animate-pulse">🔴 Recording... Speak now</p>
           </div>
         )}
-      </div>
-
-      {/* Hidden audio element for playing responses */}
-      <audio ref={audioRef} className="hidden" />
+      </form>
     </div>
   );
 };

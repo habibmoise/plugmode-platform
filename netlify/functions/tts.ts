@@ -1,5 +1,5 @@
-// netlify/functions/tts.ts
-export const handler = async (event: any, context: any) => {
+// netlify/functions/tts.js
+export const handler = async (event, context) => {
   // Handle CORS
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -95,7 +95,7 @@ export const handler = async (event: any, context: any) => {
       isBase64Encoded: true,
     };
     
-  } catch (error: any) {
+  } catch (error) {
     console.error('Text-to-speech failed:', error);
     return {
       statusCode: 500,

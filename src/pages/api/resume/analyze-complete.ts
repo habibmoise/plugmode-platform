@@ -1,8 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import formidable from 'formidable';
-import fs from 'fs';
-import pdf from 'pdf-parse';
-import OpenAI from 'openai';
+const formidable = require('formidable');
+const fs = require('fs');
+const pdf = require('pdf-parse');
+const { OpenAI } = require('openai');
 
 export const config = {
   api: {
@@ -56,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Missing userId or resumeId' });
     }
 
-    // Extract text from PDF using pdf-parse
+    // Extract text from PDF
     let extractedText = '';
     let extractionMethod = 'direct';
     
@@ -75,19 +75,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       
     } catch (pdfError) {
       console.error('❌ PDF extraction failed:', pdfError);
-      
-      // Try OCR as fallback (if available)
-      try {
-        extractedText = await extractWithOCR(uploadedFile.filepath);
-        extractionMethod = 'ocr';
-        console.log('✅ OCR extraction successful, length:', extractedText.length);
-      } catch (ocrError) {
-        console.error('❌ OCR also failed:', ocrError);
-        throw new Error('Could not extract text from PDF. Please ensure your resume is a text-based PDF, not a scanned image.');
-      }
+      throw new Error('Could not extract text from PDF. Please ensure your resume is a text-based PDF, not a scanned image.');
     }
 
-    // REAL AI analysis with OpenAI - works for ANY resume
+    // Real AI analysis with OpenAI
     console.log('🤖 Starting AI analysis...');
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -178,20 +169,6 @@ CRITICAL RULES:
   }
 }
 
-// OCR fallback function (optional - requires tesseract.js)
-async function extractWithOCR(filePath: string): Promise<string> {
-  try {
-    // This requires: npm install tesseract.js
-    const { createWorker } = require('tesseract.js');
-    const worker = await createWorker('eng');
-    const { data: { text } } = await worker.recognize(filePath);
-    await worker.terminate();
-    return text.trim();
-  } catch (error) {
-    throw new Error('OCR processing failed');
-  }
-}
-
 // Database update function - works for any user
 async function updateDatabase(
   userId: string, 
@@ -234,9 +211,17 @@ async function updateDatabase(
       }
     }
 
-    // Intelligently merge skills (avoid duplicates)
+    // Merge skills manually (compatible with older TypeScript)
     const newSkills = analysisResult.skills || [];
-    const mergedSkills = [...new Set([...existingSkills, ...newSkills])];
+    const allSkills = existingSkills.concat(newSkills);
+    const mergedSkills: string[] = [];
+    
+    // Remove duplicates manually
+    for (let i = 0; i < allSkills.length; i++) {
+      if (mergedSkills.indexOf(allSkills[i]) === -1) {
+        mergedSkills.push(allSkills[i]);
+      }
+    }
 
     console.log('📊 Skills summary:', {
       existing: existingSkills.length,

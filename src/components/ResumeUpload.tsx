@@ -1,6 +1,6 @@
-// Replace your entire src/components/ResumeUpload.tsx with this version
+// src/components/ResumeUpload.tsx - Final working version
 import React, { useState, useCallback } from 'react';
-import { FileText, CheckCircle, AlertCircle, X, Loader, Upload } from 'lucide-react';
+import { FileText, CheckCircle, AlertCircle, X, Loader, Upload, Brain } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { extractTextFromPDF, parseResumeWithAI } from '../lib/pdf-processor';
@@ -112,11 +112,24 @@ const ResumeUpload: React.FC = () => {
     event.preventDefault();
   };
 
+  const getTotalSkillsCount = (data: any): number => {
+    if (!data?.extractedSkills) return 0;
+    return data.extractedSkills.length;
+  };
+
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">AI Resume Analysis</h2>
+      <div className="flex items-center space-x-2 mb-6">
+        <Brain className="h-6 w-6 text-blue-600" />
+        <h2 className="text-2xl font-bold text-gray-900">AI Resume Analysis</h2>
+        {uploadState.success && uploadState.extractedData?.aiAnalysisSuccess && (
+          <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-medium">
+            ChatGPT-Level
+          </span>
+        )}
+      </div>
       
-      {/* Upload Area - Using only safe Tailwind classes */}
+      {/* Upload Area - Safe Tailwind classes only */}
       <div
         className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
           uploadState.uploading || uploadState.analyzing
@@ -128,12 +141,17 @@ const ResumeUpload: React.FC = () => {
       >
         {uploadState.uploading || uploadState.analyzing ? (
           <div className="flex flex-col items-center space-y-4">
-            <Loader className="h-12 w-12 text-blue-600 animate-spin" />
+            <div className="relative">
+              <Loader className="h-12 w-12 text-blue-600 animate-spin" />
+              {uploadState.analyzing && (
+                <Brain className="h-6 w-6 text-green-600 absolute -bottom-1 -right-1" />
+              )}
+            </div>
             <div className="text-lg font-medium text-blue-600">
-              {uploadState.uploading ? 'Processing PDF...' : 'AI analyzing resume...'}
+              {uploadState.uploading ? 'Processing PDF...' : 'AI analyzing your resume...'}
             </div>
             <div className="text-sm text-gray-600">
-              {uploadState.analyzing ? 'Extracting skills and insights...' : 'Reading document content...'}
+              {uploadState.analyzing ? 'Understanding your experience and skills' : 'Extracting content from PDF'}
             </div>
           </div>
         ) : (
@@ -146,14 +164,19 @@ const ResumeUpload: React.FC = () => {
               <div className="text-gray-600">
                 Get comprehensive insights about your career and skills
               </div>
-              <div className="text-sm text-gray-500 mt-3">
-                <div className="font-medium mb-1">📄 Supported formats:</div>
-                <div>• PDF files only (max 10MB)</div>
-                <div>• Text-based PDFs work best</div>
-                <div>• Avoid image-only or scanned documents</div>
-              </div>
-              <div className="text-xs text-blue-600 mt-2 font-medium">
-                ✨ Powered by advanced AI technology
+              <div className="text-sm text-gray-500 mt-3 space-y-1">
+                <div className="font-medium mb-2">📄 What our AI will extract:</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-left max-w-md mx-auto">
+                  <div>• Skills & expertise</div>
+                  <div>• Career progression</div>
+                  <div>• Experience level</div>
+                  <div>• Salary insights</div>
+                  <div>• Industry focus</div>
+                  <div>• Improvement areas</div>
+                </div>
+                <div className="mt-3 text-xs text-blue-600 font-medium">
+                  ✨ Powered by the same AI technology as ChatGPT
+                </div>
               </div>
             </div>
             
@@ -172,14 +195,14 @@ const ResumeUpload: React.FC = () => {
                 className="inline-flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition-colors font-medium"
               >
                 <FileText className="h-5 w-5 mr-2" />
-                Choose Resume File
+                Choose Resume File (PDF)
               </label>
             </div>
           </div>
         )}
       </div>
 
-      {/* Error Display - Safe classes only */}
+      {/* Error Display */}
       {uploadState.error && (
         <div className="mt-6 bg-red-50 border border-red-200 rounded-lg p-4">
           <div className="flex items-center">
@@ -195,7 +218,7 @@ const ResumeUpload: React.FC = () => {
         </div>
       )}
 
-      {/* Success Display - Safe classes only */}
+      {/* Success Display */}
       {uploadState.success && uploadState.extractedData && (
         <div className="mt-6 bg-green-50 border border-green-200 rounded-lg p-6">
           <div className="flex items-center mb-4">
@@ -205,11 +228,40 @@ const ResumeUpload: React.FC = () => {
             </span>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Skills Found */}
+          {/* Professional Summary */}
+          {uploadState.extractedData.professionalSummary && (
+            <div className="mb-6 p-4 bg-white rounded-lg border">
+              <h3 className="font-semibold text-gray-900 mb-2">Professional Summary</h3>
+              <p className="text-gray-700 text-sm">{uploadState.extractedData.professionalSummary}</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Personal Info */}
+            <div className="space-y-4">
+              <div>
+                <h4 className="font-semibold text-gray-900 mb-2">Profile Information</h4>
+                <div className="space-y-1 text-sm">
+                  {uploadState.extractedData.name && (
+                    <div><span className="font-medium">Name:</span> {uploadState.extractedData.name}</div>
+                  )}
+                  {uploadState.extractedData.email && (
+                    <div><span className="font-medium">Email:</span> {uploadState.extractedData.email}</div>
+                  )}
+                  {uploadState.extractedData.currentRole && (
+                    <div><span className="font-medium">Role:</span> {uploadState.extractedData.currentRole}</div>
+                  )}
+                  {uploadState.extractedData.experienceLevel && (
+                    <div><span className="font-medium">Level:</span> {uploadState.extractedData.experienceLevel}</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Skills */}
             <div>
               <h4 className="font-semibold text-gray-900 mb-2">
-                Skills Detected ({uploadState.extractedData.extractedSkills?.length || 0})
+                Skills Found ({getTotalSkillsCount(uploadState.extractedData)})
               </h4>
               <div className="flex flex-wrap gap-2">
                 {(uploadState.extractedData.extractedSkills || []).slice(0, 10).map((skill: string, index: number) => (
@@ -220,60 +272,27 @@ const ResumeUpload: React.FC = () => {
                     {skill}
                   </span>
                 ))}
-                {(uploadState.extractedData.extractedSkills?.length || 0) > 10 && (
+                {getTotalSkillsCount(uploadState.extractedData) > 10 && (
                   <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm">
-                    +{(uploadState.extractedData.extractedSkills?.length || 0) - 10} more
+                    +{getTotalSkillsCount(uploadState.extractedData) - 10} more
                   </span>
                 )}
               </div>
             </div>
-
-            {/* Profile Info */}
-            <div>
-              <h4 className="font-semibold text-gray-900 mb-2">Profile Information</h4>
-              <div className="space-y-2 text-sm">
-                {uploadState.extractedData.name && (
-                  <div>
-                    <span className="font-medium">Name:</span> {uploadState.extractedData.name}
-                  </div>
-                )}
-                {uploadState.extractedData.email && (
-                  <div>
-                    <span className="font-medium">Email:</span> {uploadState.extractedData.email}
-                  </div>
-                )}
-                {uploadState.extractedData.currentRole && (
-                  <div>
-                    <span className="font-medium">Role:</span> {uploadState.extractedData.currentRole}
-                  </div>
-                )}
-                {uploadState.extractedData.experienceLevel && (
-                  <div>
-                    <span className="font-medium">Level:</span> {uploadState.extractedData.experienceLevel}
-                  </div>
-                )}
-              </div>
-            </div>
           </div>
 
-          {/* Professional Summary */}
-          {uploadState.extractedData.professionalSummary && (
-            <div className="mt-4 p-3 bg-white rounded border">
-              <h5 className="font-medium text-gray-900 mb-1">Professional Summary</h5>
-              <p className="text-sm text-gray-700">{uploadState.extractedData.professionalSummary}</p>
+          <div className="mt-6 flex items-center justify-between">
+            <div className="text-sm text-green-700">
+              ✅ {uploadState.extractedData.aiAnalysisSuccess ? 'AI-powered' : 'Fallback'} analysis saved to your profile
             </div>
-          )}
 
-          <div className="mt-4 text-sm text-green-700">
-            ✅ Analysis complete! {uploadState.extractedData.aiAnalysisSuccess ? 'AI-powered' : 'Fallback'} analysis used.
+            <button
+              onClick={resetState}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+            >
+              Upload Another Resume
+            </button>
           </div>
-
-          <button
-            onClick={resetState}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            Upload Another Resume
-          </button>
         </div>
       )}
     </div>

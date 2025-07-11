@@ -1,9 +1,10 @@
-// File: supabase/functions/chatgpt-resume-analyzer/index.ts
+// supabase/functions/chatgpt-resume-analyzer/index.ts - CORS Fixed
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-application-name',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
 interface ResumeAnalysis {
@@ -45,6 +46,7 @@ interface ResumeAnalysis {
 }
 
 Deno.serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -68,7 +70,14 @@ Deno.serve(async (req) => {
 
     const openaiKey = Deno.env.get('OPENAI_API_KEY')
     if (!openaiKey) {
-      throw new Error('OpenAI API key not configured')
+      console.error('❌ OpenAI API key not found')
+      return new Response(
+        JSON.stringify({ 
+          error: 'OpenAI API key not configured',
+          success: false 
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     // ChatGPT-level analysis with intelligent prompting
@@ -109,7 +118,7 @@ Deno.serve(async (req) => {
             Extract ALL relevant information and provide intelligent career insights.
             
             Resume Content:
-            ${text}
+            ${text.substring(0, 15000)} ${text.length > 15000 ? '...(truncated for analysis)' : ''}
             
             Provide analysis in this exact JSON structure (no additional text, just valid JSON):
             {
@@ -155,7 +164,7 @@ Deno.serve(async (req) => {
             }`
           }
         ],
-        temperature: 0.3, // Low temperature for consistent, factual analysis
+        temperature: 0.3,
         max_tokens: 2000
       })
     })
@@ -172,7 +181,6 @@ Deno.serve(async (req) => {
     let analysisResult: ResumeAnalysis
     
     try {
-      // Parse the AI response
       const aiContent = aiResponse.choices[0].message.content
       console.log('🔍 AI Response preview:', aiContent.substring(0, 200))
       
@@ -238,7 +246,7 @@ function createIntelligentFallback(text: string, fileName: string): ResumeAnalys
   // Extract name from first meaningful line
   const lines = text.split('\n').filter(line => line.trim().length > 0);
   let name = '';
-  for (const line of lines.slice(0, 5)) {
+  for (const line of lines.slice(0, 8)) {
     const cleanLine = line.trim();
     if (cleanLine.length > 2 && cleanLine.length < 50 && 
         !cleanLine.includes('@') && !cleanLine.includes('http')) {
@@ -325,16 +333,6 @@ function createIntelligentFallback(text: string, fileName: string): ResumeAnalys
     experienceLevel = 'Entry Level';
   }
 
-  // Extract potential current role from text
-  const roleKeywords = ['manager', 'director', 'analyst', 'developer', 'specialist', 'coordinator', 'consultant'];
-  for (const line of lines.slice(0, 10)) {
-    const lineLower = line.toLowerCase();
-    if (roleKeywords.some(keyword => lineLower.includes(keyword)) && line.length < 100) {
-      currentRole = line.trim();
-      break;
-    }
-  }
-
   return {
     personalInfo: {
       name: name || 'Professional',
@@ -360,28 +358,12 @@ function createIntelligentFallback(text: string, fileName: string): ResumeAnalys
 }
 
 function enhanceAnalysis(analysis: ResumeAnalysis, originalText: string): ResumeAnalysis {
-  // Add remote work readiness assessment
   const remoteIndicators = ['remote', 'distributed', 'virtual', 'home office', 'digital communication', 'slack', 'zoom', 'teams'];
   const hasRemoteExperience = remoteIndicators.some(indicator => 
     originalText.toLowerCase().includes(indicator)
   );
   
   analysis.remoteWorkReady = hasRemoteExperience || analysis.skills.technical.length > 0;
-
-  // Enhance salary estimation based on skills and experience
-  const hasHighValueSkills = analysis.skills.technical.some(skill => 
-    ['Programming', 'Cloud Computing', 'Data Analysis'].includes(skill)
-  );
-  
-  const hasManagementExp = analysis.skills.business.some(skill =>
-    ['Team Leadership', 'Strategic Planning', 'Budget Management'].includes(skill)
-  );
-
-  if (hasHighValueSkills && hasManagementExp && analysis.experienceLevel === 'Senior Level') {
-    analysis.salaryRange = '$100,000 - $150,000';
-  } else if (hasHighValueSkills && analysis.experienceLevel === 'Mid Level') {
-    analysis.salaryRange = '$70,000 - $100,000';
-  }
 
   return analysis;
 }

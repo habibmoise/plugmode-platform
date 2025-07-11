@@ -1,22 +1,14 @@
+// Replace your entire src/components/ResumeUpload.tsx with this version
 import React, { useState, useCallback } from 'react';
 import { FileText, CheckCircle, AlertCircle, X, Loader, Upload } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { supabase } from '../lib/supabase';
-
-interface ExtractedData {
-  name: string;
-  email: string;
-  phone: string;
-  location: string;
-  skills: string[];
-  profession: string;
-}
+import { extractTextFromPDF, parseResumeWithAI } from '../lib/pdf-processor';
 
 interface UploadState {
   uploading: boolean;
   analyzing: boolean;
-  extractedData: ExtractedData | null;
+  extractedData: any | null;
   error: string | null;
   success: boolean;
 }
@@ -42,175 +34,6 @@ const ResumeUpload: React.FC = () => {
     });
   };
 
-  // Simple skill extraction from text
-  const extractSkillsFromText = (text: string): string[] => {
-    const commonSkills = [
-      'JavaScript', 'TypeScript', 'React', 'Node.js', 'Python', 'Java', 'HTML', 'CSS',
-      'SQL', 'Git', 'Docker', 'AWS', 'MongoDB', 'PostgreSQL', 'Express', 'Vue.js',
-      'Angular', 'PHP', 'Ruby', 'C++', 'C#', 'Go', 'Rust', 'Swift', 'Kotlin',
-      'Redux', 'GraphQL', 'REST API', 'Microservices', 'DevOps', 'Kubernetes',
-      'TailwindCSS', 'Bootstrap', 'Sass', 'Webpack', 'Babel', 'Jest', 'Cypress',
-      'Figma', 'Adobe', 'Photoshop', 'Project Management', 'Agile', 'Scrum',
-      'Leadership', 'Communication', 'Problem Solving', 'Team Collaboration',
-      'Data Analysis', 'Machine Learning', 'AI', 'Blockchain', 'Cloud Computing'
-    ];
-
-    const textLower = text.toLowerCase();
-    const foundSkills = commonSkills.filter(skill => 
-      textLower.includes(skill.toLowerCase())
-    );
-
-    // Add some default skills if none found
-    if (foundSkills.length === 0) {
-      return ['Communication', 'Problem Solving', 'Team Collaboration', 'Project Management'];
-    }
-
-    return foundSkills.slice(0, 15); // Limit to 15 skills
-  };
-
-  // Extract basic info from text
-  const extractBasicInfo = (text: string, fileName: string): ExtractedData => {
-    const emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
-    const phoneRegex = /(\+?1?[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})/;
-    
-    const emailMatch = text.match(emailRegex);
-    const phoneMatch = text.match(phoneRegex);
-    
-    // Extract name (first line that looks like a name)
-    const lines = text.split('\n').filter(line => line.trim().length > 0);
-    let name = '';
-    for (const line of lines.slice(0, 5)) {
-      if (line.length < 50 && line.length > 5 && !line.includes('@') && !line.includes('http')) {
-        name = line.trim();
-        break;
-      }
-    }
-    
-    if (!name) {
-      name = fileName.replace('.pdf', '').replace(/[-_]/g, ' ');
-    }
-
-    const skills = extractSkillsFromText(text);
-    
-    return {
-      name: name || 'Professional',
-      email: emailMatch ? emailMatch[1] : '',
-      phone: phoneMatch ? phoneMatch[1] : '',
-      location: '',
-      skills: skills,
-      profession: skills.includes('JavaScript') || skills.includes('React') ? 'Software Developer' : 'Professional'
-    };
-  };
-
-  const extractTextFromPDF = async (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const arrayBuffer = e.target?.result as ArrayBuffer;
-          const uint8Array = new Uint8Array(arrayBuffer);
-          
-          // Simple text extraction - look for text patterns
-          const decoder = new TextDecoder('utf-8');
-          let text = decoder.decode(uint8Array);
-          
-          // Clean up the text
-          text = text.replace(/[^\x20-\x7E\n\r]/g, ' ');
-          text = text.replace(/\s+/g, ' ').trim();
-          
-          if (text.length < 50) {
-            // If extraction failed, use filename and basic info
-            text = `Resume file: ${file.name}. Software Developer with experience in JavaScript, React, Node.js, and database management. Skilled in project management, team collaboration, and problem-solving.`;
-          }
-          
-          resolve(text);
-        } catch (error) {
-          console.error('❌ PDF text extraction failed:', error);
-          // Fallback text based on file name
-          const fallbackText = `Resume file: ${file.name}. Professional with experience in technology, project management, and business development.`;
-          resolve(fallbackText);
-        }
-      };
-      reader.onerror = () => {
-        // Even on error, provide fallback
-        const fallbackText = `Resume file: ${file.name}. Professional with relevant experience and skills.`;
-        resolve(fallbackText);
-      };
-      reader.readAsArrayBuffer(file);
-    });
-  };
-
-  const saveSkillsToProfile = async (extractedData: ExtractedData): Promise<void> => {
-    if (!user) {
-      throw new Error('User not authenticated');
-    }
-
-    try {
-      console.log('💾 Saving skills to profile for user:', user.id);
-      
-      // Check if user exists
-      const { data: existingUser, error: fetchError } = await supabase
-        .from('users')
-        .select('id, skills')
-        .eq('id', user.id)
-        .single();
-
-      if (fetchError && fetchError.code === 'PGRST116') {
-        // User doesn't exist, create them
-        const { error: createError } = await supabase
-          .from('users')
-          .insert({
-            id: user.id,
-            email: user.email || '',
-            name: extractedData.name || '',
-            skills: extractedData.skills,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          });
-
-        if (createError) {
-          console.error('❌ Error creating user:', createError);
-          // Don't throw - continue anyway
-          return;
-        }
-        
-        console.log('✅ User created with skills');
-        return;
-      }
-
-      if (fetchError) {
-        console.error('❌ Error fetching user:', fetchError);
-        // Don't throw - continue anyway
-        return;
-      }
-
-      // Merge existing skills with new ones
-      const existingSkills = existingUser?.skills || [];
-      const newSkills = extractedData.skills || [];
-      const mergedSkills = [...new Set([...existingSkills, ...newSkills])];
-
-      // Update user profile
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({
-          name: extractedData.name || existingUser?.name,
-          skills: mergedSkills,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', user.id);
-
-      if (updateError) {
-        console.error('❌ Error updating user profile:', updateError);
-        // Don't throw - continue anyway
-      } else {
-        console.log('✅ Profile updated with skills:', mergedSkills.length);
-      }
-    } catch (error) {
-      console.error('❌ Error saving skills to profile:', error);
-      // Don't throw - let the upload succeed anyway
-    }
-  };
-
   const uploadFile = useCallback(async (file: File) => {
     if (!user) {
       showToast('Please log in to upload a resume', 'error');
@@ -233,16 +56,9 @@ const ResumeUpload: React.FC = () => {
         analyzing: true 
       }));
 
-      // Extract data locally (no external API calls)
-      const analysisResult = extractBasicInfo(extractedText, file.name);
+      // Analyze with ChatGPT-level AI
+      const analysisResult = await parseResumeWithAI(extractedText);
       
-      // Save skills to profile (non-blocking)
-      try {
-        await saveSkillsToProfile(analysisResult);
-      } catch (error) {
-        console.warn('Profile save failed, but continuing:', error);
-      }
-
       setUploadState(prev => ({
         ...prev,
         analyzing: false,
@@ -250,10 +66,8 @@ const ResumeUpload: React.FC = () => {
         success: true
       }));
 
-      showToast(
-        `Resume analyzed successfully! Found ${analysisResult.skills.length} skills.`,
-        'success'
-      );
+      const skillCount = analysisResult.extractedSkills?.length || 0;
+      showToast(`🎯 Resume analyzed! Found ${skillCount} skills.`, 'success');
 
     } catch (error) {
       console.error('❌ Upload error:', error);
@@ -276,7 +90,7 @@ const ResumeUpload: React.FC = () => {
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+    if (file.size > 10 * 1024 * 1024) {
       showToast('File size must be less than 10MB', 'error');
       return;
     }
@@ -287,12 +101,10 @@ const ResumeUpload: React.FC = () => {
   const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault();
     const file = event.dataTransfer.files[0];
-    if (file) {
-      if (file.type !== 'application/pdf') {
-        showToast('Please upload a PDF file', 'error');
-        return;
-      }
+    if (file && file.type === 'application/pdf') {
       uploadFile(file);
+    } else {
+      showToast('Please upload a PDF file', 'error');
     }
   };
 
@@ -302,9 +114,9 @@ const ResumeUpload: React.FC = () => {
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">Upload Your Resume</h2>
+      <h2 className="text-2xl font-bold text-gray-900 mb-6">AI Resume Analysis</h2>
       
-      {/* Upload Area */}
+      {/* Upload Area - Using only safe Tailwind classes */}
       <div
         className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
           uploadState.uploading || uploadState.analyzing
@@ -318,10 +130,10 @@ const ResumeUpload: React.FC = () => {
           <div className="flex flex-col items-center space-y-4">
             <Loader className="h-12 w-12 text-blue-600 animate-spin" />
             <div className="text-lg font-medium text-blue-600">
-              {uploadState.uploading ? 'Processing file...' : 'Analyzing resume...'}
+              {uploadState.uploading ? 'Processing PDF...' : 'AI analyzing resume...'}
             </div>
             <div className="text-sm text-gray-600">
-              This may take a few moments
+              {uploadState.analyzing ? 'Extracting skills and insights...' : 'Reading document content...'}
             </div>
           </div>
         ) : (
@@ -329,10 +141,10 @@ const ResumeUpload: React.FC = () => {
             <Upload className="h-12 w-12 text-gray-400 mx-auto" />
             <div className="space-y-2">
               <div className="text-xl font-semibold text-gray-900">
-                Upload Your Resume
+                Upload Your Resume for AI Analysis
               </div>
               <div className="text-gray-600">
-                Drag and drop your resume here, or click to browse
+                Get comprehensive insights about your career and skills
               </div>
               <div className="text-sm text-gray-500 mt-3">
                 <div className="font-medium mb-1">📄 Supported formats:</div>
@@ -341,11 +153,10 @@ const ResumeUpload: React.FC = () => {
                 <div>• Avoid image-only or scanned documents</div>
               </div>
               <div className="text-xs text-blue-600 mt-2 font-medium">
-                ✨ AI will automatically extract your skills and experience
+                ✨ Powered by advanced AI technology
               </div>
             </div>
             
-            {/* Hidden file input */}
             <input
               id="resume-upload"
               type="file"
@@ -355,7 +166,6 @@ const ResumeUpload: React.FC = () => {
               disabled={uploadState.uploading || uploadState.analyzing}
             />
             
-            {/* Upload Button */}
             <div className="mt-6">
               <label 
                 htmlFor="resume-upload" 
@@ -369,7 +179,7 @@ const ResumeUpload: React.FC = () => {
         )}
       </div>
 
-      {/* Error Display */}
+      {/* Error Display - Safe classes only */}
       {uploadState.error && (
         <div className="mt-6 bg-red-50 border border-red-200 rounded-lg p-4">
           <div className="flex items-center">
@@ -385,13 +195,13 @@ const ResumeUpload: React.FC = () => {
         </div>
       )}
 
-      {/* Success Display */}
+      {/* Success Display - Safe classes only */}
       {uploadState.success && uploadState.extractedData && (
         <div className="mt-6 bg-green-50 border border-green-200 rounded-lg p-6">
           <div className="flex items-center mb-4">
             <CheckCircle className="h-6 w-6 text-green-600 mr-2" />
             <span className="text-lg font-medium text-green-800">
-              Resume Analysis Complete!
+              🎯 Resume Analysis Complete!
             </span>
           </div>
           
@@ -399,10 +209,10 @@ const ResumeUpload: React.FC = () => {
             {/* Skills Found */}
             <div>
               <h4 className="font-semibold text-gray-900 mb-2">
-                Skills Detected ({uploadState.extractedData.skills.length})
+                Skills Detected ({uploadState.extractedData.extractedSkills?.length || 0})
               </h4>
               <div className="flex flex-wrap gap-2">
-                {uploadState.extractedData.skills.slice(0, 10).map((skill, index) => (
+                {(uploadState.extractedData.extractedSkills || []).slice(0, 10).map((skill: string, index: number) => (
                   <span
                     key={index}
                     className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm"
@@ -410,9 +220,9 @@ const ResumeUpload: React.FC = () => {
                     {skill}
                   </span>
                 ))}
-                {uploadState.extractedData.skills.length > 10 && (
+                {(uploadState.extractedData.extractedSkills?.length || 0) > 10 && (
                   <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm">
-                    +{uploadState.extractedData.skills.length - 10} more
+                    +{(uploadState.extractedData.extractedSkills?.length || 0) - 10} more
                   </span>
                 )}
               </div>
@@ -432,15 +242,30 @@ const ResumeUpload: React.FC = () => {
                     <span className="font-medium">Email:</span> {uploadState.extractedData.email}
                   </div>
                 )}
-                <div>
-                  <span className="font-medium">Profession:</span> {uploadState.extractedData.profession}
-                </div>
+                {uploadState.extractedData.currentRole && (
+                  <div>
+                    <span className="font-medium">Role:</span> {uploadState.extractedData.currentRole}
+                  </div>
+                )}
+                {uploadState.extractedData.experienceLevel && (
+                  <div>
+                    <span className="font-medium">Level:</span> {uploadState.extractedData.experienceLevel}
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
+          {/* Professional Summary */}
+          {uploadState.extractedData.professionalSummary && (
+            <div className="mt-4 p-3 bg-white rounded border">
+              <h5 className="font-medium text-gray-900 mb-1">Professional Summary</h5>
+              <p className="text-sm text-gray-700">{uploadState.extractedData.professionalSummary}</p>
+            </div>
+          )}
+
           <div className="mt-4 text-sm text-green-700">
-            ✅ Skills have been automatically added to your profile.
+            ✅ Analysis complete! {uploadState.extractedData.aiAnalysisSuccess ? 'AI-powered' : 'Fallback'} analysis used.
           </div>
 
           <button

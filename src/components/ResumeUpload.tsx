@@ -285,15 +285,34 @@ const ResumeUpload: React.FC = () => {
         ) : (
           <div className="space-y-4">
             <FileText className="h-12 w-12 text-gray-400 mx-auto" />
-            <div>
-              <label htmlFor="resume-upload" className="cursor-pointer">
-                <span className="text-lg font-medium text-blue-600 hover:text-blue-500">
+            <div className="space-y-2">
+              <label htmlFor="resume-upload" className="cursor-pointer block">
+                <div className="text-lg font-medium text-blue-600 hover:text-blue-500">
                   Click to upload your resume
-                </span>
-                <p className="text-gray-600">or drag and drop a PDF file</p>
+                </div>
+                <div className="text-gray-600">or drag and drop a PDF file</div>
+                <div className="text-sm text-gray-500 mt-2">
+                  Supported format: PDF (max 10MB)
+                </div>
               </label>
               <input
                 id="resume-upload"
+                type="file"
+                accept=".pdf"
+                onChange={handleFileUpload}
+                className="hidden"
+                disabled={uploadState.uploading || uploadState.analyzing}
+              />
+            </div>
+            
+            {/* Upload Button Alternative */}
+            <div className="mt-4">
+              <label htmlFor="resume-upload-alt" className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition-colors">
+                <FileText className="h-4 w-4 mr-2" />
+                Choose File
+              </label>
+              <input
+                id="resume-upload-alt"
                 type="file"
                 accept=".pdf"
                 onChange={handleFileUpload}

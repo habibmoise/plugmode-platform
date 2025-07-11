@@ -292,7 +292,10 @@ const ResumeUpload: React.FC = () => {
                 </div>
                 <div className="text-gray-600">or drag and drop a PDF file</div>
                 <div className="text-sm text-gray-500 mt-2">
-                  Supported format: PDF (max 10MB)
+                  Supported formats: PDF only (max 10MB)
+                </div>
+                <div className="text-xs text-gray-400 mt-1">
+                  For best results, upload a text-based PDF resume
                 </div>
               </label>
               <input

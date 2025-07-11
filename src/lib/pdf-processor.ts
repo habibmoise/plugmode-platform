@@ -1,4 +1,4 @@
-// src/lib/pdf-processor.ts - Enhanced version that actually works
+// src/lib/pdf-processor.ts - Fixed TypeScript version
 import * as pdfjsLib from 'pdfjs-dist';
 import { supabase } from './supabase';
 
@@ -26,6 +26,12 @@ export interface ExtractedResumeData {
   aiAnalysisSuccess?: boolean;
 }
 
+interface TextExtractionResult {
+  success: boolean;
+  preview: string;
+  quality: number;
+}
+
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   console.log('📄 Extracting text from PDF using enhanced PDF.js:', file.name);
   
@@ -43,7 +49,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
       // Preserve text positioning for better structure
       const textItems = textContent.items as any[];
       let pageText = '';
-      let lastY = null;
+      let lastY: number | null = null;
       
       // Sort items by position (top to bottom, left to right)
       textItems.sort((a, b) => {
@@ -91,7 +97,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     
   } catch (error) {
     console.error('❌ PDF extraction failed:', error);
-    throw new Error(`Failed to extract text from PDF: ${error.message}`);
+    throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
@@ -317,8 +323,8 @@ const extractPhone = (text: string): string => {
   return phoneMatch?.[0] || '';
 };
 
-// Test function for debugging
-export const testPDFExtraction = async (file: File): Promise<{success: boolean, preview: string, quality: number}> => {
+// Test function for debugging - FIXED RETURN TYPE
+export const testPDFExtraction = async (file: File): Promise<TextExtractionResult> => {
   try {
     const text = await extractTextFromPDF(file);
     const quality = assessTextQuality(text);

@@ -196,7 +196,7 @@ const ResumeUpload: React.FC<ResumeUploadProps> = ({ onUploadComplete, className
             </div>
             
             <div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-3">ChatGPT-Level Resume Analysis</h3>
+              <h3 className="text-xl font-semibold text-gray-900 mb-3">AI-Powered Resume Analysis</h3>
               <p className="text-gray-600 mb-6">Upload your PDF resume for intelligent skill extraction and career insights</p>
               
               <input type="file" accept=".pdf" onChange={handleFileSelect} className="hidden" id="resume-upload" disabled={uploading} />
@@ -218,7 +218,7 @@ const ResumeUpload: React.FC<ResumeUploadProps> = ({ onUploadComplete, className
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>ChatGPT-level AI</span>
+                <span>Advanced AI analysis</span>
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />

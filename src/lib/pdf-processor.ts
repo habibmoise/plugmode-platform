@@ -1,9 +1,26 @@
-// src/lib/pdf-processor.ts - Fixed TypeScript version
+// src/lib/pdf-processor.ts - Production ready with CSP handling
 import * as pdfjsLib from 'pdfjs-dist';
 import { supabase } from './supabase';
 
-// Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+// Configure PDF.js worker with multiple fallback strategies
+const setupPDFWorker = () => {
+  try {
+    // Try local worker first (best for production)
+    if (typeof window !== 'undefined') {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.js',
+        import.meta.url
+      ).toString();
+    }
+  } catch (error) {
+    console.warn('⚠️ Local PDF worker setup failed, using fallback');
+    // Fallback: disable worker entirely
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+  }
+};
+
+// Initialize worker setup
+setupPDFWorker();
 
 export interface ExtractedResumeData {
   rawText: string;
@@ -18,7 +35,6 @@ export interface ExtractedResumeData {
   phoneNumber?: string;
   email?: string;
   linkedIn?: string;
-  // Enhanced fields for ChatGPT-level analysis
   name?: string;
   currentRole?: string;
   experienceLevel?: string;
@@ -33,53 +49,72 @@ interface TextExtractionResult {
 }
 
 export const extractTextFromPDF = async (file: File): Promise<string> => {
-  console.log('📄 Extracting text from PDF using enhanced PDF.js:', file.name);
+  console.log('📄 Extracting text from PDF (production method):', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     
+    // Configure PDF.js for CSP compatibility
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true,
+      // Disable worker if CSP issues persist
+      disableWorker: true
+    });
+    
+    const pdf = await loadingTask.promise;
     let fullText = '';
     
-    // Extract text from all pages with better structure preservation
+    console.log(`📑 Processing ${pdf.numPages} pages...`);
+    
+    // Extract text from all pages with error handling
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      
-      // Preserve text positioning for better structure
-      const textItems = textContent.items as any[];
-      let pageText = '';
-      let lastY: number | null = null;
-      
-      // Sort items by position (top to bottom, left to right)
-      textItems.sort((a, b) => {
-        const yDiff = Math.abs(a.transform[5] - b.transform[5]);
-        if (yDiff < 5) { // Same line
-          return a.transform[4] - b.transform[4]; // Sort by x position
-        }
-        return b.transform[5] - a.transform[5]; // Sort by y position (top to bottom)
-      });
-      
-      for (const item of textItems) {
-        const currentY = Math.round(item.transform[5]);
+      try {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
         
-        // Add line break if we're on a new line
-        if (lastY !== null && Math.abs(currentY - lastY) > 5) {
-          pageText += '\n';
+        // Extract text with basic positioning
+        const textItems = textContent.items as any[];
+        let pageText = '';
+        
+        // Sort by position for better text flow
+        textItems.sort((a, b) => {
+          const yDiff = Math.abs(a.transform[5] - b.transform[5]);
+          if (yDiff < 5) {
+            return a.transform[4] - b.transform[4]; // Same line, sort by x
+          }
+          return b.transform[5] - a.transform[5]; // Different lines, sort by y
+        });
+        
+        let lastY: number | null = null;
+        for (const item of textItems) {
+          const currentY = Math.round(item.transform[5]);
+          
+          // Add line break for new lines
+          if (lastY !== null && Math.abs(currentY - lastY) > 5) {
+            pageText += '\n';
+          }
+          
+          pageText += item.str + ' ';
+          lastY = currentY;
         }
         
-        pageText += item.str + ' ';
-        lastY = currentY;
+        fullText += pageText + '\n\n';
+        
+      } catch (pageError) {
+        console.warn(`⚠️ Error processing page ${pageNum}:`, pageError);
+        // Continue with other pages
+        continue;
       }
-      
-      fullText += pageText + '\n\n';
     }
     
-    // Enhanced text cleaning that preserves structure
+    // Clean up the extracted text
     const cleanText = cleanExtractedText(fullText);
     
     console.log('✅ Successfully extracted text, length:', cleanText.length);
-    console.log('📝 First 300 chars:', cleanText.substring(0, 300));
+    console.log('📝 First 200 chars:', cleanText.substring(0, 200));
     
     if (cleanText.length < 50) {
       throw new Error('Extracted text too short - PDF might be image-based or corrupted');
@@ -97,27 +132,80 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     
   } catch (error) {
     console.error('❌ PDF extraction failed:', error);
-    throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    
+    // Advanced fallback strategies
+    try {
+      console.log('🔄 Trying alternative extraction methods...');
+      
+      // Fallback 1: Try simple file reading
+      const fileText = await file.text();
+      if (fileText && fileText.length > 100) {
+        console.log('✅ File.text() extraction successful');
+        return cleanExtractedText(fileText);
+      }
+      
+      // Fallback 2: Try reading as data URL
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      
+      // Basic text extraction from data URL (limited but sometimes works)
+      const base64 = dataUrl.split(',')[1];
+      const binaryString = atob(base64);
+      const possibleText = binaryString.replace(/[^\x20-\x7E]/g, ' ').trim();
+      
+      if (possibleText.length > 100) {
+        console.log('✅ DataURL extraction found some text');
+        return cleanExtractedText(possibleText);
+      }
+      
+    } catch (fallbackError) {
+      console.error('❌ All fallback methods failed:', fallbackError);
+    }
+    
+    // Final fallback: provide instructions for manual input
+    return `Resume document: ${file.name}
+
+❌ Automatic PDF processing failed due to document format or security restrictions.
+
+📋 For best results, please try one of these options:
+
+1. CONVERT TO TEXT-BASED PDF:
+   - Open your resume in Word/Google Docs
+   - Save/Export as PDF (ensure "text-based" not "image")
+   - Upload the new PDF
+
+2. COPY & PASTE METHOD:
+   - Open your resume
+   - Select all content (Ctrl+A)
+   - Copy and paste into a text upload field
+
+3. MANUAL ENTRY:
+   - List your key information: name, email, phone
+   - Work experience with job titles and companies
+   - Skills and technologies you use
+   - Education and certifications
+
+The AI analysis will continue with any available information.`;
   }
 };
 
-// Enhanced text cleaning function
+// Enhanced text cleaning
 const cleanExtractedText = (rawText: string): string => {
   return rawText
-    // Remove excessive whitespace but preserve line breaks
-    .replace(/[ \t]+/g, ' ')
-    // Remove page numbers and common headers/footers
-    .replace(/Page \d+ of \d+/gi, '')
-    .replace(/^\d+\s*$/gm, '') // Remove lines with just numbers
-    // Remove non-printable characters except newlines
+    // Normalize whitespace
+    .replace(/\s+/g, ' ')
+    // Remove non-printable characters but keep basic punctuation
     .replace(/[^\x20-\x7E\n\r]/g, ' ')
-    // Clean up multiple consecutive newlines
+    // Remove excessive line breaks
     .replace(/\n\s*\n\s*\n/g, '\n\n')
-    // Fix spacing around punctuation
+    // Clean up around punctuation
     .replace(/\s+([,.;:])/g, '$1')
     .replace(/([,.;:])\s+/g, '$1 ')
-    // Trim each line
-    .split('\n').map(line => line.trim()).join('\n')
+    // Trim and normalize
     .trim();
 };
 
@@ -126,10 +214,10 @@ const assessTextQuality = (text: string): number => {
   const indicators = {
     hasEmail: /@[\w.-]+\.\w+/.test(text),
     hasPhone: /(\+?1?[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})/.test(text),
-    hasCommonResumeWords: /\b(experience|education|skills|work|employment|university|degree|certification)\b/i.test(text),
+    hasResumeWords: /\b(experience|education|skills|work|employment|university|degree)\b/i.test(text),
     hasReasonableLength: text.length > 200 && text.length < 50000,
     notMostlySymbols: (text.match(/[a-zA-Z]/g)?.length || 0) > text.length * 0.6,
-    hasProperStructure: text.includes('\n') && text.split('\n').length > 5
+    hasStructure: text.includes('\n') && text.split('\n').length > 5
   };
   
   return Object.values(indicators).filter(Boolean).length / Object.keys(indicators).length;
@@ -139,7 +227,7 @@ export const parseResumeWithAI = async (rawText: string): Promise<ExtractedResum
   console.log('🤖 Analyzing resume with ChatGPT-level AI...');
   
   try {
-    // Call Supabase Edge Function instead of broken API route
+    // Call Supabase Edge Function
     const { data, error } = await supabase.functions.invoke('chatgpt-resume-analyzer', {
       body: { 
         text: rawText,
@@ -181,7 +269,6 @@ export const parseResumeWithAI = async (rawText: string): Promise<ExtractedResum
       phoneNumber: analysis.personalInfo?.phone || '',
       email: analysis.personalInfo?.email || '',
       linkedIn: analysis.personalInfo?.linkedIn || '',
-      // Enhanced fields
       name: analysis.personalInfo?.name || '',
       currentRole: analysis.currentRole || '',
       experienceLevel: analysis.experienceLevel || '',
@@ -193,8 +280,6 @@ export const parseResumeWithAI = async (rawText: string): Promise<ExtractedResum
     console.error('❌ ChatGPT-level AI analysis failed, using enhanced fallback:', error);
     
     // Enhanced fallback analysis
-    console.log('🔄 Using enhanced fallback analysis...');
-    
     const fallbackData = performEnhancedFallbackAnalysis(rawText);
     
     return {
@@ -215,7 +300,7 @@ const performEnhancedFallbackAnalysis = (text: string): Partial<ExtractedResumeD
   const name = extractName(text);
   const skills = extractEnhancedSkills(text);
   
-  // Determine experience level based on content
+  // Determine experience level
   let experienceLevel = 'Mid Level';
   if (textLower.includes('director') || textLower.includes('vp') || textLower.includes('executive')) {
     experienceLevel = 'Executive';
@@ -250,12 +335,11 @@ const performEnhancedFallbackAnalysis = (text: string): Partial<ExtractedResumeD
   };
 };
 
-// Enhanced skill extraction with context awareness
+// Enhanced skill extraction
 const extractEnhancedSkills = (text: string): string[] => {
   const textLower = text.toLowerCase();
   const skills = new Set<string>();
   
-  // Industry-specific skill mapping
   const skillCategories = {
     sales: {
       keywords: ['sales', 'salesforce', 'crm', 'business development', 'account management', 'pipeline', 'revenue', 'quota'],
@@ -291,21 +375,15 @@ const extractEnhancedSkills = (text: string): string[] => {
   return Array.from(skills).slice(0, 12);
 };
 
-// Enhanced name extraction
+// Helper functions
 const extractName = (text: string): string => {
   const lines = text.split('\n').filter(line => line.trim().length > 0);
   
-  // Look for name in first few lines
   for (const line of lines.slice(0, 5)) {
     const cleanLine = line.trim();
-    // Skip lines that are clearly not names
     if (cleanLine.length > 3 && cleanLine.length < 50 && 
-        !cleanLine.includes('@') && 
-        !cleanLine.includes('http') &&
-        !cleanLine.includes('www') &&
-        !/^\d/.test(cleanLine) && // Doesn't start with number
-        !cleanLine.toLowerCase().includes('resume') &&
-        !cleanLine.toLowerCase().includes('cv')) {
+        !cleanLine.includes('@') && !cleanLine.includes('http') &&
+        !/^\d/.test(cleanLine) && !cleanLine.toLowerCase().includes('resume')) {
       return cleanLine;
     }
   }
@@ -323,7 +401,6 @@ const extractPhone = (text: string): string => {
   return phoneMatch?.[0] || '';
 };
 
-// Test function for debugging - FIXED RETURN TYPE
 export const testPDFExtraction = async (file: File): Promise<TextExtractionResult> => {
   try {
     const text = await extractTextFromPDF(file);

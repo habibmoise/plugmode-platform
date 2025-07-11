@@ -11,158 +11,173 @@ Deno.serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  const debugInfo: string[] = []
+  debugInfo.push('Function started at ' + new Date().toISOString())
+
   try {
     const { text } = await req.json()
-    
+    debugInfo.push(`Text received, length: ${text?.length}`)
+
     if (!text || text.length < 50) {
       return new Response(
-        JSON.stringify({ error: 'Valid resume text required' }),
+        JSON.stringify({ 
+          error: 'Valid resume text required',
+          debug: debugInfo
+        }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    console.log('🤖 Using REAL OpenAI to analyze resume...')
-    
     // Get OpenAI API key
-    const openaiKey = Deno.env.get('OPENAI_API_KEY')
-    if (!openaiKey) {
-      throw new Error('OpenAI API key not configured')
+    const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
+    
+    if (!openaiApiKey) {
+      debugInfo.push('CRITICAL: OpenAI API key not found in environment')
+      return new Response(
+        JSON.stringify({ 
+          error: 'OpenAI API key not configured',
+          debug: debugInfo
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
-    // Clean the text to remove PDF formatting junk
-    const cleanText = text
-      .replace(/\b(obj|endobj|stream|endstream|xref|startxref|trailer|%%EOF)\b/g, '')
-      .replace(/\b\d+\s+\d+\s+(obj|R)\b/g, '')
-      .replace(/<<[^>]*>>/g, '')
-      .replace(/BT\s+ET/g, '')
-      .replace(/[^\x20-\x7E\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+    debugInfo.push(`OpenAI key found, length: ${openaiApiKey.length}, starts with sk-: ${openaiApiKey.startsWith('sk-')}`)
 
-    console.log('📝 Cleaned text length:', cleanText.length)
-    console.log('📝 Sample cleaned text:', cleanText.substring(0, 300))
+    // Call OpenAI API
+    try {
+      debugInfo.push('About to call OpenAI API...')
+      
+      const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          messages: [
+            {
+              role: 'system',
+              content: `You are an expert resume analyzer. Extract comprehensive information and return ONLY valid JSON:
 
-    // Call OpenAI API for intelligent analysis
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openaiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an expert resume analyzer. Your job is to:
-1. Extract ALL relevant skills from the resume text
-2. Identify the person's profession and experience level
-3. Extract contact information
-4. Focus on skills actually mentioned or demonstrated in the resume
-
-Return ONLY a JSON object with this structure:
 {
-  "skills": ["skill1", "skill2", "skill3"],
   "name": "Full Name",
-  "email": "email@example.com",
-  "phone": "phone number",
-  "location": "City, State/Country",
-  "profession": "detected job role"
+  "email": "email@domain.com", 
+  "phone": "+1234567890",
+  "location": "City, State",
+  "skills": ["skill1", "skill2", "skill3", "skill4", "skill5"],
+  "profession": "detected job title"
 }
 
-Be comprehensive but accurate. Include technical skills, business skills, soft skills, tools, and any other relevant competencies mentioned.`
-          },
-          {
-            role: 'user',
-            content: `Analyze this resume text and extract information. The text may contain some PDF formatting artifacts - focus on the meaningful content:
-
-${cleanText.substring(0, 4000)}`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 1000
+Extract ALL skills: technical, business, soft skills, tools, certifications.`
+            },
+            {
+              role: 'user',
+              content: `Analyze this resume and return only the JSON:\n\n${text}`
+            }
+          ],
+          temperature: 0.3,
+          max_tokens: 800
+        })
       })
-    })
 
-    if (!openaiResponse.ok) {
-      const errorText = await openaiResponse.text()
-      console.log('❌ OpenAI API failed:', openaiResponse.status, errorText)
-      
-      // Fallback to manual analysis if OpenAI fails
-      return fallbackAnalysis(text)
+      debugInfo.push(`OpenAI API response status: ${openaiResponse.status}`)
+      debugInfo.push(`OpenAI API response headers: ${JSON.stringify(Object.fromEntries(openaiResponse.headers.entries()))}`)
+
+      if (!openaiResponse.ok) {
+        const errorText = await openaiResponse.text()
+        debugInfo.push(`OpenAI API error response: ${errorText}`)
+        
+        return new Response(
+          JSON.stringify({ 
+            error: `OpenAI API error: ${openaiResponse.status}`,
+            debug: debugInfo,
+            openaiError: errorText,
+            openaiStatus: openaiResponse.status
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      const openaiData = await openaiResponse.json()
+      debugInfo.push('OpenAI response received successfully')
+      debugInfo.push(`OpenAI usage: ${JSON.stringify(openaiData.usage)}`)
+
+      // Parse AI response
+      let extractedData
+      try {
+        const aiContent = openaiData.choices[0].message.content.trim()
+        debugInfo.push(`AI content preview: ${aiContent.substring(0, 100)}...`)
+        
+        const jsonMatch = aiContent.match(/\{[\s\S]*\}/)
+        if (!jsonMatch) {
+          throw new Error('No valid JSON found')
+        }
+        
+        extractedData = JSON.parse(jsonMatch[0])
+        debugInfo.push(`JSON parsed successfully, keys: ${Object.keys(extractedData)}`)
+      } catch (parseError) {
+        debugInfo.push(`JSON parse failed: ${parseError.message}`)
+        
+        // Fallback extraction
+        const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)
+        const phoneMatch = text.match(/[\+]?[1-9]?[\s\-\(\)]?\d{3}[\s\-\(\)]?\d{3}[\s\-]?\d{4}/)
+        
+        extractedData = {
+          name: '',
+          email: emailMatch?.[0] || '',
+          phone: phoneMatch?.[0] || '',
+          location: '',
+          skills: ['Communication', 'Problem Solving', 'Teamwork'],
+          profession: 'Professional'
+        }
+        debugInfo.push('Using fallback extraction')
+      }
+
+      // Validate data
+      const validatedData = {
+        name: extractedData.name || '',
+        email: extractedData.email || '',
+        phone: extractedData.phone || '',
+        location: extractedData.location || '',
+        skills: Array.isArray(extractedData.skills) ? 
+          extractedData.skills.filter(s => s && s.trim()).slice(0, 15) : [],
+        profession: extractedData.profession || 'Professional'
+      }
+
+      debugInfo.push(`Final skills count: ${validatedData.skills.length}`)
+
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          data: validatedData,
+          debug: debugInfo
+        }),
+        { 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      )
+
+    } catch (fetchError) {
+      debugInfo.push(`Fetch error: ${fetchError.message}`)
+      return new Response(
+        JSON.stringify({ 
+          error: `Network error: ${fetchError.message}`,
+          debug: debugInfo
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
-
-    const openaiData = await openaiResponse.json()
-    const response = openaiData.choices[0].message.content
-
-    console.log('🤖 OpenAI raw response:', response)
-
-    // Parse JSON response
-    let parsedData
-    try {
-      const cleanResponse = response.replace(/```json|```/g, '').trim()
-      parsedData = JSON.parse(cleanResponse)
-    } catch (e) {
-      console.log('❌ JSON parsing failed, using fallback')
-      return fallbackAnalysis(text)
-    }
-
-    // Validate and return data
-    const extractedData = {
-      skills: Array.isArray(parsedData.skills) ? parsedData.skills.slice(0, 15) : [],
-      name: parsedData.name || '',
-      email: parsedData.email || '',
-      phone: parsedData.phone || '',
-      location: parsedData.location || '',
-      profession: parsedData.profession || ''
-    }
-
-    console.log('✅ OpenAI analysis complete:', extractedData)
-
-    return new Response(
-      JSON.stringify({ success: true, data: extractedData }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
 
   } catch (error) {
-    console.log('❌ Function error:', error?.message)
-    return fallbackAnalysis(text)
+    debugInfo.push(`Top level error: ${error.message}`)
+    return new Response(
+      JSON.stringify({ 
+        error: `Processing failed: ${error.message}`,
+        debug: debugInfo
+      }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
   }
 })
-
-// Fallback analysis function
-function fallbackAnalysis(text: string) {
-  console.log('🔄 Using fallback analysis...')
-  
-  const textLower = text.toLowerCase()
-  const skills = []
-  
-  // Basic skill detection as fallback
-  const basicSkills = [
-    'sales', 'business development', 'leadership', 'management', 'crm', 'salesforce',
-    'strategic planning', 'team leadership', 'customer success', 'revenue growth',
-    'partnership development', 'account management', 'operations', 'training',
-    'communication', 'collaboration', 'problem solving', 'analytical thinking'
-  ]
-  
-  basicSkills.forEach(skill => {
-    if (textLower.includes(skill)) {
-      skills.push(skill.charAt(0).toUpperCase() + skill.slice(1))
-    }
-  })
-  
-  return new Response(
-    JSON.stringify({ 
-      success: true, 
-      data: {
-        skills: skills,
-        name: '',
-        email: '',
-        phone: '',
-        location: '',
-        profession: 'Professional'
-      }
-    }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  )
-}

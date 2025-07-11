@@ -70,7 +70,7 @@ const ResumeUpload: React.FC = () => {
       setProcessingStage('Analyzing with AI...');
 
       // Call Supabase function
-      const { data, error: funcError } = await supabase.functions.invoke('chatgpt-resume-analyzer', {
+      const { data, error: funcError } = await supabase.functions.invoke('resume-analyzer', {
         body: { 
           text: extractedText,
           fileName: file.name
@@ -182,6 +182,25 @@ const ResumeUpload: React.FC = () => {
                 <FileText className="h-5 w-5" />
                 <span>Choose PDF Resume</span>
               </label>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 text-sm text-gray-500">
+              <div className="flex items-center space-x-2">
+                <CheckCircle className="h-4 w-4 text-green-500" />
+                <span>PDF files only</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <CheckCircle className="h-4 w-4 text-green-500" />
+                <span>Maximum 10MB</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <CheckCircle className="h-4 w-4 text-green-500" />
+                <span>Advanced AI analysis</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <CheckCircle className="h-4 w-4 text-green-500" />
+                <span>Real content analysis</span>
+              </div>
             </div>
           </div>
         )}

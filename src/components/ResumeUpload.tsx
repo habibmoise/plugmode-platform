@@ -121,6 +121,15 @@ const ResumeUpload: React.FC = () => {
         setProcessingStage('');
         // Keep extractedData and success message visible
       }, 2000);
+
+    } catch (error) {
+      console.error('Upload error:', error);
+      setError(error instanceof Error ? error.message : 'Upload failed. Please try again.');
+      setUploadProgress(0);
+      setProcessingStage('');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -1,4 +1,4 @@
-// src/components/ResumeUpload.tsx - FIXED PERSISTENT RESULTS
+// src/components/ResumeUpload.tsx - PHASE 1: UI CRASH FIX ONLY
 import React, { useState } from 'react';
 import { FileText, CheckCircle, AlertCircle, X, Loader, Zap, Info } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,6 +14,7 @@ const ResumeUpload: React.FC = () => {
   const [processingStage, setProcessingStage] = useState('');
   const [extractedData, setExtractedData] = useState<any>(null);
   const [extractionQuality, setExtractionQuality] = useState<any>(null);
+  const [resultsLocked, setResultsLocked] = useState(false);
 
   const uploadFile = async (file: File) => {
     if (!user) return;
@@ -22,7 +23,6 @@ const ResumeUpload: React.FC = () => {
     setError('');
     setSuccess('');
     setUploadProgress(0);
-    // DON'T clear extractedData here - keep previous results visible during upload
     setExtractionQuality(null);
 
     try {
@@ -119,19 +119,19 @@ const ResumeUpload: React.FC = () => {
         uploadDate: new Date().toLocaleString()
       };
 
-      // SET RESULTS AND KEEP THEM PERSISTENT
+      // SET RESULTS AND LOCK THEM TO PREVENT CLEARING
       setExtractedData(formattedData);
+      setResultsLocked(true);
+      console.log('🔒 Results locked and set:', formattedData);
 
       setUploadProgress(100);
       setProcessingStage('Complete!');
       setSuccess(`Resume analyzed successfully! Found ${allSkills.length} skills using ${data.analysisType} analysis.`);
 
-      // Only clear progress indicators, NOT the results
-      setTimeout(() => {
-        setUploadProgress(0);
-        setProcessingStage('');
-        setUploading(false); // Make sure uploading state is cleared
-      }, 2000);
+      // Clear upload state immediately but keep results
+      setUploadProgress(0);
+      setProcessingStage('');
+      setUploading(false);
 
     } catch (error) {
       console.error('Upload error:', error);
@@ -139,8 +139,10 @@ const ResumeUpload: React.FC = () => {
       setUploadProgress(0);
       setProcessingStage('');
       setUploading(false);
+    } finally {
+      // Ensure uploading is always set to false
+      setUploading(false);
     }
-    // DON'T set uploading to false here - it's handled in the setTimeout and catch block
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -151,7 +153,9 @@ const ResumeUpload: React.FC = () => {
   };
 
   const resetUpload = () => {
+    console.log('🔄 Manually resetting results');
     setExtractedData(null);
+    setResultsLocked(false);
     setExtractionQuality(null);
     setSuccess('');
     setError('');
@@ -208,7 +212,18 @@ const ResumeUpload: React.FC = () => {
             
             <div>
               <h3 className="text-xl font-semibold text-gray-900 mb-3">AI-Powered Resume Analysis</h3>
-              <p className="text-gray-600 mb-6">Advanced PDF extraction with intelligent skill detection</p>
+              <p className="text-gray-600 mb-4">Upload your PDF resume for intelligent skill extraction and analysis</p>
+              
+              {/* FILE FORMAT INSTRUCTIONS - RESTORED FROM EARLIER VERSIONS */}
+              <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <h4 className="text-sm font-medium text-gray-900 mb-2">File Requirements:</h4>
+                <ul className="text-sm text-gray-600 space-y-1">
+                  <li>• <strong>Format:</strong> PDF files only (max 10MB)</li>
+                  <li>• <strong>Content:</strong> Text-based PDFs work best</li>
+                  <li>• <strong>Quality:</strong> Ensure text is selectable (not scanned images)</li>
+                  <li>• <strong>Language:</strong> English resumes for optimal results</li>
+                </ul>
+              </div>
               
               <input 
                 type="file" 
@@ -231,27 +246,27 @@ const ResumeUpload: React.FC = () => {
             <div className="grid grid-cols-2 gap-4 text-sm text-gray-500">
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Multiple extraction methods</span>
+                <span>OpenAI Analysis</span>
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Quality validation</span>
+                <span>Skill Categorization</span>
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>OpenAI integration</span>
+                <span>Quality Validation</span>
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Smart fallback analysis</span>
+                <span>Secure Processing</span>
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* PERSISTENT RESULTS DISPLAY */}
-      {extractedData && (
+      {/* PERSISTENT RESULTS DISPLAY - ONLY SHOW IF RESULTS ARE LOCKED */}
+      {extractedData && resultsLocked && (
         <div className="mt-6 p-6 bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-xl">
           <div className="flex items-start justify-between">
             <div className="flex-1">
@@ -303,7 +318,7 @@ const ResumeUpload: React.FC = () => {
                 {extractedData.skills.length > 0 ? (
                   <>
                     {/* Technical Skills */}
-                    {extractedData.skillCategories.technical.length > 0 && (
+                    {extractedData.skillCategories.technical && extractedData.skillCategories.technical.length > 0 && (
                       <div>
                         <h6 className="text-sm font-medium text-gray-700 mb-2">
                           Technical Skills ({extractedData.skillCategories.technical.length}):
@@ -319,7 +334,7 @@ const ResumeUpload: React.FC = () => {
                     )}
                     
                     {/* Business Skills */}
-                    {extractedData.skillCategories.business.length > 0 && (
+                    {extractedData.skillCategories.business && extractedData.skillCategories.business.length > 0 && (
                       <div>
                         <h6 className="text-sm font-medium text-gray-700 mb-2">
                           Business Skills ({extractedData.skillCategories.business.length}):
@@ -335,7 +350,7 @@ const ResumeUpload: React.FC = () => {
                     )}
                     
                     {/* Soft Skills */}
-                    {extractedData.skillCategories.soft.length > 0 && (
+                    {extractedData.skillCategories.soft && extractedData.skillCategories.soft.length > 0 && (
                       <div>
                         <h6 className="text-sm font-medium text-gray-700 mb-2">
                           Soft Skills ({extractedData.skillCategories.soft.length}):
@@ -351,7 +366,7 @@ const ResumeUpload: React.FC = () => {
                     )}
                     
                     {/* Industry Skills */}
-                    {extractedData.skillCategories.industry.length > 0 && (
+                    {extractedData.skillCategories.industry && extractedData.skillCategories.industry.length > 0 && (
                       <div>
                         <h6 className="text-sm font-medium text-gray-700 mb-2">
                           Industry Skills ({extractedData.skillCategories.industry.length}):
@@ -408,7 +423,7 @@ const ResumeUpload: React.FC = () => {
         </div>
       )}
 
-      {/* Error Display */}
+      {/* Error Display - FIXED: No theme context dependencies */}
       {error && (
         <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start space-x-3">
           <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
@@ -422,7 +437,7 @@ const ResumeUpload: React.FC = () => {
         </div>
       )}
 
-      {/* Success Display */}
+      {/* Success Display - FIXED: No theme context dependencies */}
       {success && (
         <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start space-x-3">
           <CheckCircle className="h-5 w-5 text-green-500 mt-0.5 flex-shrink-0" />

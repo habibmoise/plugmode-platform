@@ -242,7 +242,7 @@ export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeDat
   }
 };
 
-// 🔍 RESTORED WORKING ARRAYBUFFER EXTRACTION - Less strict filtering
+// 🔍 TARGETED READABLE TEXT EXTRACTION - Focus on English content
 async function extractWithEnhancedArrayBuffer(file: File): Promise<string> {
   console.log('🧠 Starting enhanced ArrayBuffer extraction...');
   
@@ -255,74 +255,93 @@ async function extractWithEnhancedArrayBuffer(file: File): Promise<string> {
     isPdfFormat: Array.from(uint8Array.slice(0, 4)).every((b, i) => b === '%PDF'.charCodeAt(i))
   });
   
-  let textChunks: string[] = [];
-  let currentChunk = '';
-  let readableCharCount = 0;
-  let totalCharCount = 0;
+  let readableTextSegments: string[] = [];
+  let currentText = '';
   
-  // More permissive text extraction - restore working approach
-  for (let i = 0; i < uint8Array.length; i++) {
+  // 🔥 FOCUS ON READABLE ENGLISH TEXT ONLY
+  for (let i = 0; i < uint8Array.length - 1; i++) {
     const byte = uint8Array[i];
-    totalCharCount++;
     
-    // Accept wider range of characters
-    if ((byte >= 32 && byte <= 126) ||     // Printable ASCII
-        (byte >= 128 && byte <= 255) ||    // Extended ASCII
-        byte === 10 || byte === 13 || byte === 9) {  // Whitespace
-      
+    // Only process standard printable ASCII (avoid extended ASCII that gives symbols)
+    if ((byte >= 32 && byte <= 126) || byte === 10 || byte === 13 || byte === 9) {
       const char = String.fromCharCode(byte);
-      readableCharCount++;
       
-      // Less aggressive filtering - keep more content
-      if (!/^[%<>{}[\]()]$/.test(char)) {
-        currentChunk += char;
+      // Build up text, but skip obvious PDF syntax
+      if (!/[%<>{}[\]()§µ÷±æ]/.test(char)) {
+        currentText += char;
       }
-      
-    } else if (currentChunk.length > 5) {
-      // Process accumulated chunk with more permissive rules
-      const words = currentChunk.split(/\s+/)
-        .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
-        .filter(word => !isPdfArtifact(word));
-      
-      if (words.length > 1) {
-        const chunkText = words.join(' ');
-        textChunks.push(chunkText);
-        console.log('📝 Found text chunk:', chunkText.substring(0, 80) + (chunkText.length > 80 ? '...' : ''));
+    } else {
+      // Hit a non-ASCII byte - process what we have if it looks like English
+      if (currentText.length > 15) {
+        const cleaned = currentText.trim();
+        
+        // Only keep text that looks like readable English
+        if (isReadableEnglishText(cleaned)) {
+          readableTextSegments.push(cleaned);
+          console.log('📝 Found readable text:', cleaned.substring(0, 100) + (cleaned.length > 100 ? '...' : ''));
+        }
       }
-      
-      currentChunk = '';
+      currentText = '';
     }
   }
   
-  // Process final chunk
-  if (currentChunk.length > 5) {
-    const words = currentChunk.split(/\s+/)
-      .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
-      .filter(word => !isPdfArtifact(word));
-    
-    if (words.length > 1) {
-      const chunkText = words.join(' ');
-      textChunks.push(chunkText);
-      console.log('📝 Found final chunk:', chunkText.substring(0, 80) + (chunkText.length > 80 ? '...' : ''));
+  // Process final segment
+  if (currentText.length > 15) {
+    const cleaned = currentText.trim();
+    if (isReadableEnglishText(cleaned)) {
+      readableTextSegments.push(cleaned);
+      console.log('📝 Found final readable text:', cleaned.substring(0, 100) + (cleaned.length > 100 ? '...' : ''));
     }
   }
   
-  const extractedText = textChunks.join(' ');
+  // Combine all readable segments
+  const extractedText = readableTextSegments.join(' ');
   
   console.log('📊 ArrayBuffer extraction results:', {
-    totalChunks: textChunks.length,
+    readableSegments: readableTextSegments.length,
     extractedLength: extractedText.length,
-    readableRatio: Math.round((readableCharCount / totalCharCount) * 100) + '%',
-    preview: extractedText.substring(0, 300),
-    hasResumeContent: extractedText.length > 100
+    preview: extractedText.substring(0, 400),
+    hasEnglishWords: /\b[A-Za-z]{3,}\b/.test(extractedText),
+    hasResumeTerms: /\b(experience|education|skills|work|job|manager|professional|years|company)\b/i.test(extractedText)
   });
   
-  if (extractedText.length > 50 && textChunks.length > 1) {
-    console.log('✅ Enhanced ArrayBuffer extraction found text content');
+  if (extractedText.length > 100 && readableTextSegments.length > 0) {
+    console.log('✅ Enhanced ArrayBuffer extraction found readable English content');
     return extractedText;
   }
   
-  throw new Error(`ArrayBuffer extraction insufficient: ${extractedText.length} chars, ${textChunks.length} chunks`);
+  throw new Error(`ArrayBuffer extraction insufficient: ${extractedText.length} chars, ${readableTextSegments.length} readable segments`);
+}
+
+function isReadableEnglishText(text: string): boolean {
+  // Must have reasonable length
+  if (text.length < 15 || text.length > 1000) return false;
+  
+  // Must contain letters
+  const letters = (text.match(/[a-zA-Z]/g) || []).length;
+  const letterRatio = letters / text.length;
+  if (letterRatio < 0.4) return false; // At least 40% letters
+  
+  // Must contain some English words (3+ letters)
+  const englishWords = (text.match(/\b[A-Za-z]{3,}\b/g) || []).length;
+  if (englishWords < 2) return false; // At least 2 English words
+  
+  // Must not be mostly PDF artifacts
+  const pdfArtifacts = /\b(obj|endobj|stream|endstream|filter|flatedecode|length|type|subtype|basefont|encoding|font|fontname|bbox|matrix)\b/gi;
+  const artifactMatches = (text.match(pdfArtifacts) || []).length;
+  const words = text.split(/\s+/).length;
+  const artifactRatio = artifactMatches / Math.max(1, words);
+  if (artifactRatio > 0.5) return false; // Less than 50% PDF artifacts
+  
+  // Must not be mostly numbers or symbols
+  const numbersAndSymbols = (text.match(/[0-9§µ÷±æçñü]/g) || []).length;
+  const symbolRatio = numbersAndSymbols / text.length;
+  if (symbolRatio > 0.3) return false; // Less than 30% numbers/symbols
+  
+  // Bonus points for resume-like content
+  const resumeTerms = /\b(experience|education|skills|summary|objective|work|job|employment|qualifications|achievements|accomplishments|projects|certifications|training|languages|references|contact|profile|career|professional|responsibilities|management|leadership|technical|manager|engineer|developer|analyst|coordinator|specialist|consultant|administrator|supervisor|director|lead|senior|junior|years|months|graduated|degree|university|college|company|corporation)\b/i;
+  
+  return resumeTerms.test(text) || letterRatio > 0.7; // Either has resume terms OR very high letter ratio
 }
 
 function isLikelyResumeText(text: string): boolean {

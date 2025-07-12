@@ -1,13 +1,11 @@
-// src/lib/pdf-processor.ts - BULLETPROOF WITH OCR FALLBACK
 import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-import Tesseract from 'tesseract.js';
 
-// ✅ Disable workers for pdf.js
-pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.3.93/pdf.worker.min.js';
 
+// 📢 Diagnostics
 console.log('🔧 PDF.js Configuration Diagnostics:');
 console.log('   - GlobalWorkerOptions.workerSrc:', pdfjsLib.GlobalWorkerOptions.workerSrc);
-console.log('   - Worker disabled:', pdfjsLib.GlobalWorkerOptions.workerSrc === '');
 console.log('   - PDF.js version:', pdfjsLib.version || 'unknown');
 
 export interface ExtractedResumeData {
@@ -22,198 +20,160 @@ export interface ExtractedResumeData {
     structureIndicators: number;
     wordDiversity: number;
     processingTime: number;
-    diagnostics: {
-      pdfJsAttempted: boolean;
-      pdfJsSuccess: boolean;
-      fallbackAttempted: boolean;
-      fallbackSuccess: boolean;
-      ocrAttempted: boolean;
-      ocrSuccess: boolean;
-      errorDetails: string;
-    };
+    diagnostics: any;
   };
 }
 
 const PDF_CONFIG = {
-  MAX_PAGES: 5,
+  MAX_PAGES: 10,
   MAIN_TIMEOUT_MS: 10000,
-  MIN_TEXT_LENGTH: 30
+  MIN_TEXT_LENGTH: 100,
 };
 
 export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeData> => {
   const startTime = Date.now();
   console.log('🔍 Starting robust PDF text extraction...');
-  
-  const diagnostics = {
+  const diagnostics: any = {
     pdfJsAttempted: false,
     pdfJsSuccess: false,
     fallbackAttempted: false,
     fallbackSuccess: false,
-    ocrAttempted: false,
-    ocrSuccess: false,
-    errorDetails: ''
+    errorDetails: '',
   };
-
-  let pdf: any = null;
 
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('📄 PDF loaded, size:', arrayBuffer.byteLength, 'bytes');
     diagnostics.pdfJsAttempted = true;
 
-    const loadingTask = pdfjsLib.getDocument({
-      data: arrayBuffer,
-      disableWorker: true
-    });
+    try {
+      const loadingTask = pdfjsLib.getDocument({
+        data: arrayBuffer,
+        cMapPacked: false,
+        disableWorker: false, // Allow worker now that we set workerSrc
+      });
+      const pdf = await Promise.race([
+        loadingTask.promise,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('PDF.js loading timeout')), PDF_CONFIG.MAIN_TIMEOUT_MS)
+        ),
+      ]);
+      console.log('✅ PDF.js loaded:', pdf.numPages, 'pages');
 
-    pdf = await Promise.race([
-      loadingTask.promise,
-      timeout(PDF_CONFIG.MAIN_TIMEOUT_MS, 'PDF.js loading timeout')
-    ]);
-
-    console.log('✅ PDF.js loaded:', pdf.numPages, 'pages');
-
-    const maxPages = Math.min(pdf.numPages, PDF_CONFIG.MAX_PAGES);
-    let allText = '';
-
-    for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-      console.log(`📄 Processing page ${pageNum}...`);
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-
-      const pageText = textContent.items
-        .map((item: any) => item.str || '')
-        .filter((t: string) => t.trim().length > 0)
-        .join(' ');
-
-      if (pageText.length > 10) {
+      let allText = '';
+      const maxPages = Math.min(pdf.numPages, PDF_CONFIG.MAX_PAGES);
+      for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map((item: any) => item.str || '')
+          .filter((str: string) => str.trim().length > 0)
+          .join(' ');
+        console.log(`📄 Page ${pageNum}: ${pageText.length} chars`);
         allText += pageText + '\n\n';
-        console.log(`✅ Page ${pageNum}: ${pageText.length} characters extracted`);
-      } else {
-        console.log(`⚠️ Page ${pageNum}: No text content found`);
       }
 
-      await page.cleanup();
-    }
-
-    await pdf.destroy();
-    pdf = null;
-
-    const cleanedText = cleanAndValidateText(allText);
-    if (cleanedText.length >= PDF_CONFIG.MIN_TEXT_LENGTH) {
-      diagnostics.pdfJsSuccess = true;
-      return buildResult(cleanedText, 'pdfjs-main-thread', startTime, diagnostics);
-    } else {
+      await pdf.destroy();
+      const cleanedText = cleanAndValidateText(allText);
+      if (cleanedText.length >= PDF_CONFIG.MIN_TEXT_LENGTH) {
+        diagnostics.pdfJsSuccess = true;
+        return makeResult(cleanedText, 'pdfjs', startTime, diagnostics);
+      }
       throw new Error('PDF.js extracted insufficient text');
+    } catch (err: any) {
+      diagnostics.errorDetails = 'PDF.js failed: ' + err.message;
+      console.warn('❌ PDF.js failed:', err.message);
     }
 
-  } catch (pdfError: any) {
-    console.warn('❌ PDF.js failed:', pdfError.message);
-    diagnostics.errorDetails += `PDF.js: ${pdfError.message}`;
-  }
-
-  // 🔄 Try ArrayBuffer fallback
-  try {
+    // 🧠 Fallback to ArrayBuffer extraction
     diagnostics.fallbackAttempted = true;
-    const fallbackText = await extractWithArrayBuffer(file);
-
-    if (fallbackText && fallbackText.length >= PDF_CONFIG.MIN_TEXT_LENGTH) {
+    const fallbackText = extractWithArrayBuffer(arrayBuffer);
+    if (fallbackText.length >= PDF_CONFIG.MIN_TEXT_LENGTH) {
       diagnostics.fallbackSuccess = true;
-      return buildResult(fallbackText, 'arraybuffer-fallback', startTime, diagnostics);
+      return makeResult(fallbackText, 'arraybuffer-fallback', startTime, diagnostics);
     }
-  } catch (fbError: any) {
-    console.warn('❌ ArrayBuffer fallback failed:', fbError.message);
-    diagnostics.errorDetails += ` | ArrayBuffer: ${fbError.message}`;
+    throw new Error('ArrayBuffer fallback insufficient text');
+  } catch (finalError: any) {
+    diagnostics.errorDetails += ' | Final fallback: ' + finalError.message;
+    console.warn('⚠️ All extractions failed:', finalError.message);
+
+    // Last resort fallback
+    const filenameText = `Resume: ${file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}. Professional document requiring manual extraction.`;
+    return makeResult(filenameText, 'filename-fallback', startTime, diagnostics);
   }
-
-  // 🧠 Try OCR fallback
-  try {
-    diagnostics.ocrAttempted = true;
-    const ocrText = await extractWithOCR(file);
-
-    if (ocrText && ocrText.length >= PDF_CONFIG.MIN_TEXT_LENGTH) {
-      diagnostics.ocrSuccess = true;
-      return buildResult(ocrText, 'ocr-fallback', startTime, diagnostics);
-    }
-  } catch (ocrError: any) {
-    console.warn('❌ OCR fallback failed:', ocrError.message);
-    diagnostics.errorDetails += ` | OCR: ${ocrError.message}`;
-  }
-
-  // 📄 Filename fallback
-  console.log('📄 Using filename fallback...');
-  const filenameText = `Resume: ${file.name.replace(/\.[^/.]+$/, '')}`;
-  return buildResult(filenameText, 'filename-fallback', startTime, diagnostics, 'poor');
 };
 
-// 📖 OCR fallback using Tesseract.js
-async function extractWithOCR(file: File): Promise<string> {
-  console.log('🧠 Starting OCR fallback...');
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true }).promise;
-  const maxPages = Math.min(pdf.numPages, PDF_CONFIG.MAX_PAGES);
-
-  let ocrText = '';
-
-  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-    console.log(`🖼️ Rendering page ${pageNum} for OCR...`);
-    const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 2.0 });
-
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d')!;
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
-
-    await page.render({ canvasContext: context, viewport }).promise;
-
-    const dataUrl = canvas.toDataURL('image/png');
-    const { data: { text } } = await Tesseract.recognize(dataUrl, 'eng', {
-      logger: m => console.log(`🔠 OCR Progress [Page ${pageNum}]:`, m.status, m.progress)
-    });
-
-    ocrText += text + '\n\n';
-    console.log(`✅ OCR Page ${pageNum} text length:`, text.length);
-  }
-
-  await pdf.destroy();
-
-  return cleanAndValidateText(ocrText);
-}
-
-async function extractWithArrayBuffer(file: File): Promise<string> {
+function extractWithArrayBuffer(arrayBuffer: ArrayBuffer): string {
   console.log('🧠 Starting ArrayBuffer fallback...');
-  const arrayBuffer = await file.arrayBuffer();
-  const text = new TextDecoder('utf-8').decode(arrayBuffer);
-  return cleanAndValidateText(text);
+  const uint8 = new Uint8Array(arrayBuffer);
+  const textDecoder = new TextDecoder('utf-8');
+  let text = textDecoder.decode(uint8);
+
+  // 🧹 Clean binary noise
+  text = text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const alphaRatio = (line.replace(/[^A-Za-z]/g, '').length / Math.max(1, line.length));
+      return alphaRatio >= 0.5 && !/obj|endobj|stream|endstream|\/Filter|\/FlateDecode/i.test(line);
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  console.log(`📊 Fallback cleaned text length: ${text.length} chars`);
+  return text;
 }
 
-function cleanAndValidateText(text: string): string {
-  return text.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function buildResult(text: string, method: string, startTime: number, diagnostics: any, quality?: string): ExtractedResumeData {
-  const processingTime = Date.now() - startTime;
-  const words = text.split(/\s+/);
-  const readableWords = words.filter(w => /\w/.test(w));
-
+function makeResult(text: string, method: string, startTime: number, diagnostics: any): ExtractedResumeData {
+  const metrics = calculateTextMetrics(text, Date.now() - startTime, diagnostics);
+  console.log('📊 Extraction completed:', {
+    method,
+    quality: metrics.textQuality,
+    wordCount: metrics.wordCount,
+    readablePercentage: metrics.readablePercentage,
+  });
   return {
     rawText: text,
     cleanedText: text,
     extractionMethod: method,
-    textQuality: quality || (readableWords.length > 50 ? 'good' : 'poor'),
-    extractionMetrics: {
-      wordCount: readableWords.length,
-      readablePercentage: Math.round((readableWords.length / words.length) * 100),
-      hasStructuredContent: /\b(experience|skills|education|summary)\b/i.test(text),
-      structureIndicators: 0,
-      wordDiversity: Math.round((new Set(readableWords.map(w => w.toLowerCase())).size / readableWords.length) * 100),
-      processingTime,
-      diagnostics
-    }
+    textQuality: metrics.textQuality,
+    extractionMetrics: metrics,
   };
 }
 
-function timeout(ms: number, msg: string) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error(msg)), ms));
+function calculateTextMetrics(text: string, processingTime: number, diagnostics: any) {
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
+  const readableWords = words.filter((w) => /[A-Za-z]/.test(w));
+  const readablePercentage = Math.round((readableWords.length / Math.max(1, words.length)) * 100);
+
+  const structureIndicators = ['experience', 'education', 'skills', 'summary'].filter((kw) =>
+    new RegExp(`\\b${kw}\\b`, 'i').test(text)
+  ).length;
+
+  return {
+    wordCount: words.length,
+    readablePercentage,
+    hasStructuredContent: structureIndicators > 0,
+    structureIndicators,
+    wordDiversity: Math.round(
+      (new Set(readableWords.map((w) => w.toLowerCase())).size / Math.max(1, readableWords.length)) * 100
+    ),
+    processingTime,
+    diagnostics,
+    textQuality: getQualityLabel(readablePercentage, structureIndicators > 0),
+  };
+}
+
+function cleanAndValidateText(text: string): string {
+  return text
+    .replace(/[\x00-\x1F\x7F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getQualityLabel(readablePercentage: number, hasStructure: boolean): string {
+  if (readablePercentage >= 90 && hasStructure) return 'excellent';
+  if (readablePercentage >= 75) return 'good';
+  if (readablePercentage >= 50) return 'fair';
+  return 'poor';
 }

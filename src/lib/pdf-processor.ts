@@ -206,7 +206,7 @@ export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeDat
       extractionMetrics: metrics
     };
     
-  } catch (unexpectedError) {
+  } catch (unexpectedError: any) {
     // ✅ ADDED: Overall error protection
     console.error('💥 Unexpected error in PDF extraction:', unexpectedError);
     const processingTime = Date.now() - startTime;
@@ -225,7 +225,6 @@ export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeDat
       textQuality: 'poor',
       extractionMetrics: metrics
     };
-    
   } finally {
     // ✅ Cleanup in finally block
     if (pdf) {

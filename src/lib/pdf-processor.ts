@@ -1,11 +1,15 @@
-// src/lib/pdf-processor.ts - LEAD-LEVEL ENTERPRISE GRADE
-import * as pdfjsLib from 'pdfjs-dist';
+// src/lib/pdf-processor.ts - DIAGNOSTIC VERSION WITH ENHANCED LOGGING
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
 
-// 🔥 BULLETPROOF WORKER DISABLE - Must happen at module level BEFORE any getDocument calls
-// This prevents "No GlobalWorkerOptions.workerSrc specified" error
+// 🔥 BULLETPROOF WORKER DISABLE - Use the explicit build/pdf import
+// This ensures we get the right PDF.js module without bundler interference
 pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
-console.log('✅ PDF.js worker disabled globally - workerSrc:', pdfjsLib.GlobalWorkerOptions.workerSrc);
+// 🔍 DIAGNOSTIC: Verify worker is disabled
+console.log('🔧 PDF.js Configuration Diagnostics:');
+console.log('   - GlobalWorkerOptions.workerSrc:', pdfjsLib.GlobalWorkerOptions.workerSrc);
+console.log('   - Worker disabled:', pdfjsLib.GlobalWorkerOptions.workerSrc === '');
+console.log('   - PDF.js version:', pdfjsLib.version || 'unknown');
 
 export interface ExtractedResumeData {
   rawText: string;
@@ -19,270 +23,214 @@ export interface ExtractedResumeData {
     structureIndicators: number;
     wordDiversity: number;
     processingTime: number;
-    pagesProcessed: number;
-    pagesSkipped: number;
+    diagnostics: {
+      pdfJsAttempted: boolean;
+      pdfJsSuccess: boolean;
+      fallbackAttempted: boolean;
+      fallbackSuccess: boolean;
+      errorDetails: string;
+    };
   };
 }
 
-// 🚀 ENTERPRISE CONFIGURATION
 const PDF_CONFIG = {
-  MAX_PAGES: 15,              // Increased for larger resumes
-  MAIN_TIMEOUT_MS: 15000,     // 15 second main timeout
-  PAGE_TIMEOUT_MS: 3000,      // 3 second per-page timeout
-  FALLBACK_TIMEOUT_MS: 8000,  // 8 second fallback timeout
-  MAX_PARALLEL_PAGES: 4,      // Controlled parallelism for memory safety
-  MIN_TEXT_LENGTH: 50,
-  MIN_SEGMENT_LENGTH: 20,
-  MIN_WORDS_PER_SEGMENT: 3,
-  STRUCTURE_THRESHOLD: 2
+  MAX_PAGES: 10,
+  MAIN_TIMEOUT_MS: 10000,
+  MIN_TEXT_LENGTH: 30,
+  MIN_SEGMENT_LENGTH: 15,
+  MIN_WORDS_PER_SEGMENT: 2
 };
 
 export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeData> => {
   const startTime = Date.now();
-  console.log('🔍 Starting enterprise PDF text extraction for:', file.name);
+  console.log('🔍 Starting diagnostic PDF text extraction for:', file.name);
+  
+  // Initialize diagnostics
+  const diagnostics = {
+    pdfJsAttempted: false,
+    pdfJsSuccess: false,
+    fallbackAttempted: false,
+    fallbackSuccess: false,
+    errorDetails: ''
+  };
   
   let pdf: any = null;
-  let mainTimeoutId: any = null;
   
+  // 🔥 OVERALL ERROR PROTECTION
   try {
     const arrayBuffer = await file.arrayBuffer();
+    console.log('📄 PDF file loaded, size:', arrayBuffer.byteLength, 'bytes');
     
-    console.log('📄 Loading PDF with enterprise timeout protection...');
+    // 🔥 CRITICAL DIAGNOSTIC: Check worker status RIGHT before getDocument
+    console.log('🔧 Pre-extraction diagnostics:');
+    console.log('   - GlobalWorkerOptions.workerSrc (current):', pdfjsLib.GlobalWorkerOptions.workerSrc);
+    console.log('   - Is workerSrc empty string?', pdfjsLib.GlobalWorkerOptions.workerSrc === '');
     
-    // 🔥 MAIN TIMEOUT with proper cleanup
-    const mainTimeoutPromise = new Promise<never>((_, reject) => {
-      mainTimeoutId = setTimeout(() => {
-        reject(new Error(`PDF parsing timeout after ${PDF_CONFIG.MAIN_TIMEOUT_MS}ms`));
-      }, PDF_CONFIG.MAIN_TIMEOUT_MS);
-    });
+    diagnostics.pdfJsAttempted = true;
+    
+    console.log('📄 Attempting PDF.js extraction with enhanced config...');
     
     const loadingTask = pdfjsLib.getDocument({
       data: arrayBuffer,
-      disableWorker: true,        // ✅ CSP-safe main thread processing
-      useWorkerFetch: false,      // ✅ No external fetches
-      isEvalSupported: false,     // ✅ No eval() calls
-      disableAutoFetch: true,     // ✅ No automatic resource fetching
-      disableStream: true,        // ✅ Load entire PDF at once
-      useSystemFonts: false       // ✅ Don't try to load system fonts
+      disableWorker: true,           // ✅ Force disable worker
+      useWorkerFetch: false,         // ✅ No worker fetching
+      isEvalSupported: false,        // ✅ No eval calls
+      disableAutoFetch: true,        // ✅ No auto resource fetching
+      disableStream: true,           // ✅ Load all at once
+      useSystemFonts: false,         // ✅ No system font loading
+      stopAtErrors: false,           // ✅ Continue on errors
+      maxImageSize: -1,              // ✅ No image size limits
+      cMapPacked: false              // ✅ No CMap worker usage
     });
     
-    // Load PDF with timeout protection
-    try {
-      pdf = await Promise.race([loadingTask.promise, mainTimeoutPromise]);
-      clearTimeout(mainTimeoutId);
-      mainTimeoutId = null;
-      console.log(`📑 PDF loaded successfully: ${pdf.numPages} pages`);
-    } catch (loadError) {
-      if (mainTimeoutId) clearTimeout(mainTimeoutId);
-      throw loadError;
-    }
+    // Add timeout for PDF loading
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('PDF loading timeout')), PDF_CONFIG.MAIN_TIMEOUT_MS)
+    );
     
+    pdf = await Promise.race([loadingTask.promise, timeoutPromise]);
+    console.log('✅ PDF.js loaded successfully:', pdf.numPages, 'pages');
+    
+    // Extract text from all pages
+    let allText = '';
     const maxPages = Math.min(pdf.numPages, PDF_CONFIG.MAX_PAGES);
     
-    // 🚀 CONTROLLED PARALLEL PROCESSING with per-page timeouts
-    console.log(`📄 Processing ${maxPages} pages with controlled parallelism (max ${PDF_CONFIG.MAX_PARALLEL_PAGES} concurrent)...`);
-    
-    const processPage = async (pageNum: number): Promise<{ pageNum: number; text: string; success: boolean }> => {
+    for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
       let page: any = null;
-      let pageTimeoutId: any = null;
-      
       try {
-        // Per-page timeout protection
-        const pageTimeoutPromise = new Promise<never>((_, reject) => {
-          pageTimeoutId = setTimeout(() => {
-            reject(new Error(`Page ${pageNum} timeout after ${PDF_CONFIG.PAGE_TIMEOUT_MS}ms`));
-          }, PDF_CONFIG.PAGE_TIMEOUT_MS);
-        });
+        console.log(`📄 Processing page ${pageNum}...`);
+        page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
         
-        const pagePromise = pdf.getPage(pageNum);
+        const pageText = textContent.items
+          .map((item: any) => item.str || '')
+          .filter((text: string) => text.trim().length > 0)
+          .join(' ');
         
-        try {
-          page = await Promise.race([pagePromise, pageTimeoutPromise]);
-          clearTimeout(pageTimeoutId);
-          pageTimeoutId = null;
-          
-          const textContent = await page.getTextContent();
-          
-          // Extract text with proper spacing and structure preservation
-          const textItems = textContent.items
-            .map((item: any) => {
-              if (item && typeof item.str === 'string' && item.str.trim()) {
-                return item.str.trim();
-              }
-              return '';
-            })
-            .filter(text => text.length > 0);
-          
-          const pageText = textItems.join(' ');
-          console.log(`✅ Page ${pageNum}: extracted ${pageText.length} characters`);
-          
-          return { pageNum, text: pageText, success: true };
-          
-        } catch (pageError) {
-          if (pageTimeoutId) clearTimeout(pageTimeoutId);
-          throw pageError;
+        if (pageText.length > 10) {
+          allText += pageText + '\n\n';
+          console.log(`✅ Page ${pageNum}: ${pageText.length} characters extracted`);
+          console.log(`   Preview: "${pageText.substring(0, 100)}..."`);
         }
         
       } catch (pageError) {
-        console.warn(`⚠️ Page ${pageNum} extraction failed:`, pageError.message);
-        return { pageNum, text: '', success: false };
+        console.warn(`⚠️ Page ${pageNum} failed:`, pageError.message);
       } finally {
-        // ✅ Always cleanup page resources
+        // ✅ FIXED: Proper page cleanup with error handling
         if (page) {
           try {
-            page.cleanup();
+            await page.cleanup();
           } catch (cleanupError) {
             console.warn(`⚠️ Page ${pageNum} cleanup failed:`, cleanupError.message);
           }
         }
       }
-    };
-    
-    // 🎯 CONTROLLED PARALLELISM - Process pages in batches to prevent memory issues
-    const pageResults: { pageNum: number; text: string; success: boolean }[] = [];
-    const batchSize = PDF_CONFIG.MAX_PARALLEL_PAGES;
-    
-    for (let i = 0; i < maxPages; i += batchSize) {
-      const batchEnd = Math.min(i + batchSize, maxPages);
-      const batchPromises = [];
-      
-      for (let j = i; j < batchEnd; j++) {
-        batchPromises.push(processPage(j + 1));
-      }
-      
-      // Process batch with allSettled (doesn't fail if one page fails)
-      const batchResults = await Promise.allSettled(batchPromises);
-      
-      // Extract successful results
-      batchResults.forEach((result) => {
-        if (result.status === 'fulfilled') {
-          pageResults.push(result.value);
-        }
-      });
-      
-      console.log(`📊 Batch ${Math.floor(i / batchSize) + 1} completed: ${batchEnd - i} pages processed`);
     }
     
-    // Compile results
-    const successfulPages = pageResults.filter(r => r.success);
-    const failedPages = pageResults.filter(r => !r.success);
+    pdf.destroy();
+    pdf = null;
     
-    const fullText = successfulPages
-      .sort((a, b) => a.pageNum - b.pageNum)  // Maintain page order
-      .map(r => r.text)
-      .filter(text => text.length > 10)
-      .join('\n\n');
-    
-    console.log(`📊 Page processing complete: ${successfulPages.length} successful, ${failedPages.length} failed`);
-    
-    // Process and validate extracted text
-    const cleanedText = cleanAndValidateText(fullText);
-    
-    if (!cleanedText || cleanedText.length < PDF_CONFIG.MIN_TEXT_LENGTH) {
-      throw new Error(`Insufficient readable text extracted (${cleanedText?.length || 0} chars from ${successfulPages.length} pages)`);
-    }
-    
-    const processingTime = Date.now() - startTime;
-    console.log('✅ PDF extraction successful:', {
-      originalLength: fullText.length,
+    const cleanedText = cleanAndValidateText(allText);
+    console.log('📊 PDF.js extraction results:', {
+      totalLength: allText.length,
       cleanedLength: cleanedText.length,
-      pagesProcessed: successfulPages.length,
-      pagesSkipped: failedPages.length,
-      processingTime: `${processingTime}ms`
+      preview: cleanedText.substring(0, 200)
     });
     
-    const metrics = calculateAdvancedTextMetrics(cleanedText, processingTime, successfulPages.length, failedPages.length);
+    if (cleanedText.length >= PDF_CONFIG.MIN_TEXT_LENGTH) {
+      diagnostics.pdfJsSuccess = true;
+      const processingTime = Date.now() - startTime;
+      const metrics = calculateTextMetrics(cleanedText, processingTime, diagnostics);
+      
+      console.log('✅ PDF.js extraction successful!');
+      
+      return {
+        rawText: allText,
+        cleanedText: cleanedText,
+        extractionMethod: 'pdfjs-main-thread',
+        textQuality: getQualityLabel(metrics.readablePercentage, metrics.hasStructuredContent),
+        extractionMetrics: metrics
+      };
+    } else {
+      throw new Error(`PDF.js extracted insufficient text (${cleanedText.length} chars)`);
+    }
     
-    return {
-      rawText: fullText,
-      cleanedText: cleanedText,
-      extractionMethod: 'enterprise-parallel-pdfjs',
-      textQuality: getQualityLabel(metrics.readablePercentage, metrics.hasStructuredContent),
-      extractionMetrics: metrics
-    };
+  } catch (pdfError) {
+    // ✅ FIXED: Better error message concatenation
+    diagnostics.errorDetails = pdfError.message;
+    console.warn('❌ PDF.js extraction failed:', pdfError.message);
     
-  } catch (error) {
-    const processingTime = Date.now() - startTime;
-    console.warn('❌ Main PDF extraction failed after', processingTime, 'ms:', error.message);
-    
-    // 🧠 ENTERPRISE FALLBACK with isolated timeout management
-    let fallbackResult: ExtractedResumeData | null = null;
-    
+    // 🔄 ENHANCED FALLBACK with detailed logging
     try {
-      console.log('🔄 Attempting enterprise ArrayBuffer extraction with multilingual support...');
+      diagnostics.fallbackAttempted = true;
+      console.log('🔄 Attempting enhanced ArrayBuffer fallback extraction...');
       
-      let fallbackTimeoutId: any = null;
-      const fallbackPromise = extractWithSmartMultilingualArrayBuffer(file);
-      const fallbackTimeout = new Promise<never>((_, reject) => {
-        fallbackTimeoutId = setTimeout(() => {
-          reject(new Error('Fallback extraction timeout'));
-        }, PDF_CONFIG.FALLBACK_TIMEOUT_MS);
-      });
+      const fallbackText = await extractWithEnhancedArrayBuffer(file);
       
-      let fallbackText: string;
-      try {
-        fallbackText = await Promise.race([fallbackPromise, fallbackTimeout]);
-        clearTimeout(fallbackTimeoutId);
-      } catch (fallbackTimeoutError) {
-        if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId);
-        throw fallbackTimeoutError;
-      }
-      
-      if (fallbackText && fallbackText.length > 100) {
-        const finalProcessingTime = Date.now() - startTime;
-        const metrics = calculateAdvancedTextMetrics(fallbackText, finalProcessingTime, 0, 0);
+      if (fallbackText && fallbackText.length >= PDF_CONFIG.MIN_TEXT_LENGTH) {
+        diagnostics.fallbackSuccess = true;
+        const processingTime = Date.now() - startTime;
+        const metrics = calculateTextMetrics(fallbackText, processingTime, diagnostics);
         
-        console.log('✅ Enterprise fallback extraction successful - proceeding with AI analysis');
+        console.log('✅ Fallback extraction successful!');
         
-        fallbackResult = {
+        return {
           rawText: fallbackText,
           cleanedText: fallbackText,
-          extractionMethod: 'enterprise-multilingual-arraybuffer',
+          extractionMethod: 'enhanced-arraybuffer-fallback',
           textQuality: getQualityLabel(metrics.readablePercentage, metrics.hasStructuredContent),
           extractionMetrics: metrics
         };
       }
     } catch (fallbackError) {
-      console.warn('❌ Enterprise fallback extraction failed:', fallbackError.message);
+      console.warn('❌ Fallback extraction also failed:', fallbackError.message);
+      // ✅ FIXED: Proper error concatenation
+      diagnostics.errorDetails = diagnostics.errorDetails 
+        ? `${diagnostics.errorDetails} | Fallback: ${fallbackError.message}`
+        : `Fallback: ${fallbackError.message}`;
     }
     
-    // Return fallback result if successful, otherwise graceful final fallback
-    if (fallbackResult) {
-      return fallbackResult;
-    }
+    // 📄 FINAL GRACEFUL FALLBACK with filename-based extraction
+    console.log('📄 Using filename-based extraction as last resort...');
+    const filename = file.name.replace(/\.[^/.]+$/, ''); // Remove extension
+    const filenameText = `Resume: ${filename.replace(/[-_]/g, ' ')}. Professional document requiring manual text extraction for optimal AI analysis.`;
     
-    // 📄 ENTERPRISE GRACEFUL FINAL FALLBACK
-    const finalProcessingTime = Date.now() - startTime;
-    console.log('📄 Using enterprise minimal fallback - AI will work with available information...');
-    const minimalText = `Professional Resume Document: ${file.name}. Enterprise text extraction encountered technical limitations, but AI analysis can proceed with available metadata, filename patterns, and document structure.`;
+    const processingTime = Date.now() - startTime;
+    const metrics = calculateTextMetrics(filenameText, processingTime, diagnostics);
     
     return {
-      rawText: minimalText,
-      cleanedText: minimalText,
-      extractionMethod: 'enterprise-graceful-fallback',
+      rawText: filenameText,
+      cleanedText: filenameText,
+      extractionMethod: 'filename-minimal-fallback',
       textQuality: 'poor',
-      extractionMetrics: {
-        wordCount: minimalText.split(' ').length,
-        readablePercentage: 100,
-        hasStructuredContent: false,
-        structureIndicators: 0,
-        wordDiversity: 100,
-        processingTime: finalProcessingTime,
-        pagesProcessed: 0,
-        pagesSkipped: 0
-      }
+      extractionMetrics: metrics
+    };
+    
+  } catch (unexpectedError) {
+    // ✅ ADDED: Overall error protection
+    console.error('💥 Unexpected error in PDF extraction:', unexpectedError);
+    const processingTime = Date.now() - startTime;
+    
+    diagnostics.errorDetails = diagnostics.errorDetails 
+      ? `${diagnostics.errorDetails} | Unexpected: ${unexpectedError.message}`
+      : `Unexpected: ${unexpectedError.message}`;
+    
+    const emergencyText = `Resume document: ${file.name}. Emergency fallback due to extraction error.`;
+    const metrics = calculateTextMetrics(emergencyText, processingTime, diagnostics);
+    
+    return {
+      rawText: emergencyText,
+      cleanedText: emergencyText,
+      extractionMethod: 'emergency-fallback',
+      textQuality: 'poor',
+      extractionMetrics: metrics
     };
     
   } finally {
-    // ✅ ENTERPRISE CLEANUP - Always cleanup PDF resources
-    if (mainTimeoutId) {
-      clearTimeout(mainTimeoutId);
-    }
-    
+    // ✅ Cleanup in finally block
     if (pdf) {
       try {
         pdf.destroy();
-        console.log('🧹 PDF resources cleaned up successfully');
       } catch (cleanupError) {
         console.warn('⚠️ PDF cleanup failed:', cleanupError.message);
       }
@@ -290,214 +238,131 @@ export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeDat
   }
 };
 
+// 🔍 ENHANCED ARRAYBUFFER EXTRACTION with detailed logging
+async function extractWithEnhancedArrayBuffer(file: File): Promise<string> {
+  console.log('🧠 Starting enhanced ArrayBuffer extraction...');
+  
+  const arrayBuffer = await file.arrayBuffer();
+  const uint8Array = new Uint8Array(arrayBuffer);
+  
+  console.log('📊 ArrayBuffer analysis:', {
+    totalBytes: uint8Array.length,
+    firstBytes: Array.from(uint8Array.slice(0, 10)).map(b => String.fromCharCode(b)).join(''),
+    // ✅ FIXED: Proper PDF format check
+    isPdfFormat: Array.from(uint8Array.slice(0, 4)).every((b, i) => b === '%PDF'.charCodeAt(i))
+  });
+  
+  let textChunks: string[] = [];
+  let currentChunk = '';
+  let readableCharCount = 0;
+  let totalCharCount = 0;
+  
+  // More aggressive text extraction
+  for (let i = 0; i < uint8Array.length; i++) {
+    const byte = uint8Array[i];
+    totalCharCount++;
+    
+    // Accept wider range of characters
+    if ((byte >= 32 && byte <= 126) ||     // Printable ASCII
+        (byte >= 128 && byte <= 255) ||    // Extended ASCII
+        byte === 10 || byte === 13 || byte === 9) {  // Whitespace
+      
+      const char = String.fromCharCode(byte);
+      readableCharCount++;
+      
+      // Skip obvious PDF artifacts but be less aggressive
+      if (!/^[%<>{}[\]()]$/.test(char)) {
+        currentChunk += char;
+      }
+      
+    } else if (currentChunk.length > 5) {
+      // Process accumulated chunk
+      const words = currentChunk.split(/\s+/)
+        .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
+        .filter(word => !isPdfArtifact(word));
+      
+      if (words.length > 1) {
+        textChunks.push(words.join(' '));
+        console.log('📝 Found text chunk:', words.slice(0, 5).join(' ') + (words.length > 5 ? '...' : ''));
+      }
+      
+      currentChunk = '';
+    }
+  }
+  
+  // Process final chunk
+  if (currentChunk.length > 5) {
+    const words = currentChunk.split(/\s+/)
+      .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
+      .filter(word => !isPdfArtifact(word));
+    
+    if (words.length > 1) {
+      textChunks.push(words.join(' '));
+    }
+  }
+  
+  const extractedText = textChunks.join(' ');
+  
+  console.log('📊 ArrayBuffer extraction results:', {
+    totalChunks: textChunks.length,
+    extractedLength: extractedText.length,
+    readableRatio: Math.round((readableCharCount / totalCharCount) * 100) + '%',
+    preview: extractedText.substring(0, 200),
+    startsWithPdf: extractedText.toLowerCase().startsWith('%pdf')
+  });
+  
+  if (extractedText.length > 30 && textChunks.length > 2) {
+    console.log('✅ Enhanced ArrayBuffer extraction found meaningful text');
+    return extractedText;
+  }
+  
+  throw new Error(`ArrayBuffer extraction insufficient: ${extractedText.length} chars, ${textChunks.length} chunks`);
+}
+
+function isPdfArtifact(word: string): boolean {
+  const artifacts = [
+    'obj', 'endobj', 'stream', 'endstream', 'xref', 'trailer', 'startxref',
+    'filter', 'flatedecode', 'length', 'type', 'subtype', 'basefont',
+    'encoding', 'font', 'fontname', 'fontsize', 'bbox', 'matrix'
+  ];
+  return artifacts.includes(word.toLowerCase()) || /^[0-9]+$/.test(word);
+}
+
 function cleanAndValidateText(text: string): string {
   if (!text) return '';
   
-  // Remove PDF artifacts and binary content
-  let cleaned = text
-    // Remove control characters except newlines and tabs
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]/g, ' ')
-    // Remove PDF object markers and metadata
-    .replace(/\d+\s+0\s+obj\b/g, ' ')
-    .replace(/\bendobj\b/g, ' ')
-    .replace(/stream\b[\s\S]*?\bendstream\b/g, ' ')
-    .replace(/<</g, ' ')
-    .replace(/>>/g, ' ')
-    // Normalize whitespace
-    .replace(/\s+/g, ' ')
-    .replace(/\n\s*\n/g, '\n')
-    .trim();
-  
-  // Filter lines to remove mostly garbage content
-  const lines = cleaned.split('\n');
-  const cleanLines = lines.filter(line => {
-    const trimmed = line.trim();
-    if (trimmed.length < 3 || trimmed.length > 500) return false;
-    
-    // Calculate letter ratio for quality check
-    const letters = (trimmed.match(/[a-zA-Z]/g) || []).length;
-    const letterRatio = letters / trimmed.length;
-    
-    // Keep lines with reasonable letter content
-    return letterRatio > 0.3;
-  });
-  
-  return cleanLines.join('\n').trim();
-}
-
-// 🌍 ENTERPRISE MULTILINGUAL SMART ARRAYBUFFER EXTRACTION
-async function extractWithSmartMultilingualArrayBuffer(file: File): Promise<string> {
-  console.log('🧠 Attempting enterprise multilingual ArrayBuffer extraction...');
-  
-  const arrayBuffer = await file.arrayBuffer();
-  
-  // 🔥 FIRST: Try to avoid PDF binary content entirely
-  const uint8Array = new Uint8Array(arrayBuffer);
-  
-  // Skip PDF header and look for text content
-  let textSegments: string[] = [];
-  let currentSegment = '';
-  let skipBinaryMode = false;
-  
-  for (let i = 0; i < uint8Array.length; i++) {
-    const byte = uint8Array[i];
-    
-    // Detect PDF binary sections and skip them
-    if (i < uint8Array.length - 10) {
-      const next10 = Array.from(uint8Array.slice(i, i + 10)).map(b => String.fromCharCode(b)).join('');
-      if (next10.includes('obj') || next10.includes('stream') || next10.includes('endobj')) {
-        skipBinaryMode = true;
-        continue;
-      }
-      if (next10.includes('endstream') || (skipBinaryMode && byte >= 32 && byte <= 126)) {
-        skipBinaryMode = false;
-      }
-    }
-    
-    if (skipBinaryMode) continue;
-    
-    // Include readable characters (ASCII + extended)
-    if ((byte >= 32 && byte <= 126) ||     // Standard ASCII
-        (byte >= 160 && byte <= 255) ||    // Latin-1 Supplement
-        byte === 10 || byte === 13 || byte === 9) {  // Newlines and tabs
-      
-      const char = String.fromCharCode(byte);
-      
-      // Skip obvious PDF syntax
-      if (!/[%<>\/\\]/.test(char)) {
-        currentSegment += char;
-      }
-    } else {
-      // Hit non-readable byte - process current segment
-      if (currentSegment.length > PDF_CONFIG.MIN_SEGMENT_LENGTH) {
-        const words = currentSegment
-          .split(/\s+/)
-          .filter(word => isLikelyResumeWord(word));
-        
-        if (words.length > PDF_CONFIG.MIN_WORDS_PER_SEGMENT) {
-          textSegments.push(words.join(' '));
-        }
-      }
-      currentSegment = '';
-    }
-  }
-  
-  // Process final segment
-  if (currentSegment.length > PDF_CONFIG.MIN_SEGMENT_LENGTH) {
-    const words = currentSegment
-      .split(/\s+/)
-      .filter(word => isLikelyResumeWord(word));
-    
-    if (words.length > PDF_CONFIG.MIN_WORDS_PER_SEGMENT) {
-      textSegments.push(words.join(' '));
-    }
-  }
-  
-  const extractedText = textSegments.join(' ');
-  
-  // Clean up any remaining PDF artifacts
-  const cleanedText = extractedText
-    .replace(/\b\d+\s+0\s+obj\b/g, ' ')
-    .replace(/\bstream\b/g, ' ')
-    .replace(/\bendobj\b/g, ' ')
-    .replace(/\bR\b/g, ' ')
-    .replace(/\bFilter\b/g, ' ')
-    .replace(/\bFlateDecode\b/g, ' ')
-    .replace(/\bLength\d*\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  
-  if (cleanedText.length > 100 && !cleanedText.startsWith('%PDF')) {
-    console.log('✅ Enterprise multilingual ArrayBuffer extraction found clean text');
-    return cleanedText;
-  }
-  
-  throw new Error('Enterprise ArrayBuffer extraction found insufficient clean text');
-}
-
-function processDecodedText(text: string): string {
-  // Clean UTF-8 decoded text with enterprise-grade filtering
   return text
-    .split('\n')
-    .filter(line => {
-      const trimmed = line.trim();
-      if (trimmed.length < 3) return false;
-      
-      // Keep lines that look like readable text (including international characters)
-      const readableChars = (trimmed.match(/[\p{L}\p{N}\s.,!?@()-]/gu) || []).length;
-      const readableRatio = readableChars / trimmed.length;
-      
-      return readableRatio > 0.5 && trimmed.length <= 300;
-    })
-    .join('\n')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ') // Remove control chars
+    .replace(/\s+/g, ' ') // Normalize whitespace
     .trim();
 }
 
-function isLikelyResumeWord(word: string): boolean {
-  if (!word || word.length < 2 || word.length > 30) return false;
+function calculateTextMetrics(text: string, processingTime: number, diagnostics: any) {
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  const readableWords = words.filter(w => /[a-zA-Z]/.test(w) && w.length > 1);
+  const readablePercentage = words.length > 0 ? Math.round((readableWords.length / words.length) * 100) : 0;
   
-  // Must contain at least one letter (including international characters)
-  if (!/[\p{L}]/u.test(word)) return false;
-  
-  // Reject PDF-specific terms
-  const pdfTerms = /^(obj|endobj|stream|endstream|filter|flatedecode|length|xref|trailer|startxref)$/i;
-  if (pdfTerms.test(word)) return false;
-  
-  // Reject words that are mostly numbers or symbols
-  const letterCount = (word.match(/[\p{L}]/gu) || []).length;
-  const letterRatio = letterCount / word.length;
-  
-  return letterRatio >= 0.4; // Higher threshold for cleaner extraction
-}
-
-function calculateAdvancedTextMetrics(text: string, processingTime: number, pagesProcessed: number, pagesSkipped: number) {
-  const words = text.split(/\s+/).filter(word => word.length > 0);
-  const readableWords = words.filter(word => isLikelyWord(word));
-  
-  const readablePercentage = words.length > 0 
-    ? Math.round((readableWords.length / words.length) * 100)
-    : 0;
-  
-  // 🔍 ENTERPRISE STRUCTURE DETECTION
-  const structureIndicators = [
-    'education', 'experience', 'skills', 'summary', 'objective', 
-    'employment', 'qualifications', 'work', 'job', 'degree', 
-    'university', 'college', 'certification', 'training',
-    'achievements', 'accomplishments', 'projects', 'languages',
-    'references', 'contact', 'profile', 'career', 'professional',
-    'responsibilities', 'management', 'leadership', 'technical'
-  ];
-  
-  const structureMatches = structureIndicators.filter(indicator => 
-    new RegExp(`\\b${indicator}\\b`, 'i').test(text)
-  ).length;
-  
-  const hasStructuredContent = structureMatches >= PDF_CONFIG.STRUCTURE_THRESHOLD;
-  
-  // 📊 ENTERPRISE WORD DIVERSITY (entropy measure)
-  const uniqueWords = new Set(readableWords.map(w => w.toLowerCase())).size;
-  const wordDiversity = readableWords.length > 0 ? 
-    Math.round((uniqueWords / readableWords.length) * 100) : 0;
+  const structureWords = ['experience', 'education', 'skills', 'summary', 'work', 'job'];
+  const hasStructuredContent = structureWords.some(word => 
+    new RegExp(`\\b${word}\\b`, 'i').test(text)
+  );
   
   return {
     wordCount: words.length,
     readablePercentage,
     hasStructuredContent,
-    structureIndicators: structureMatches,
-    wordDiversity,
+    structureIndicators: structureWords.filter(word => 
+      new RegExp(`\\b${word}\\b`, 'i').test(text)
+    ).length,
+    wordDiversity: Math.round((new Set(readableWords.map(w => w.toLowerCase())).size / Math.max(1, readableWords.length)) * 100),
     processingTime,
-    pagesProcessed,
-    pagesSkipped
+    diagnostics
   };
 }
 
 function getQualityLabel(readablePercentage: number, hasStructure: boolean): string {
-  // 🎯 ENTERPRISE QUALITY ASSESSMENT
-  if (readablePercentage >= 95 && hasStructure) return 'enterprise-excellent';
   if (readablePercentage >= 90 && hasStructure) return 'excellent';
-  if (readablePercentage >= 85 && hasStructure) return 'very-good';
-  if (readablePercentage >= 75 || (readablePercentage >= 65 && hasStructure)) return 'good';
-  if (readablePercentage >= 50 || hasStructure) return 'fair';
-  if (readablePercentage >= 30) return 'poor';
-  return 'very-poor';
+  if (readablePercentage >= 75) return 'good';
+  if (readablePercentage >= 50) return 'fair';
+  return 'poor';
 }

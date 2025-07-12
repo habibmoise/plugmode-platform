@@ -115,16 +115,12 @@ const ResumeUpload: React.FC = () => {
       setProcessingStage('Complete!');
       setSuccess(`Resume analyzed successfully! Found ${allSkills.length} skills.`);
 
-    } catch (error: any) {
-      console.error('❌ Upload error:', error);
-      setError(error.message || 'Upload failed. Please try again.');
-    } finally {
-      setUploading(false);
+      // Don't auto-clear results - let them persist
       setTimeout(() => {
         setUploadProgress(0);
         setProcessingStage('');
-      }, 3000);
-    }
+        // Keep extractedData and success message visible
+      }, 2000);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -219,23 +215,32 @@ const ResumeUpload: React.FC = () => {
                 </span>
               </h4>
               
-              {/* Profile Info */}
-              {(extractedData.name || extractedData.email || extractedData.currentRole) && (
-                <div className="mb-4">
-                  <h5 className="font-medium text-green-800 mb-2">Profile Information:</h5>
-                  <div className="text-sm text-green-700 space-y-1">
-                    {extractedData.name && <p><span className="font-medium">Name:</span> {extractedData.name}</p>}
-                    {extractedData.email && <p><span className="font-medium">Email:</span> {extractedData.email}</p>}
-                    {extractedData.currentRole && <p><span className="font-medium">Role:</span> {extractedData.currentRole}</p>}
-                    {extractedData.experienceLevel && <p><span className="font-medium">Level:</span> {extractedData.experienceLevel}</p>}
-                  </div>
+              {/* Professional Summary */}
+              {extractedData.professionalSummary && (
+                <div className="mb-4 p-3 bg-white rounded-lg border">
+                  <h5 className="font-medium text-gray-900 mb-1">Professional Summary</h5>
+                  <p className="text-sm text-gray-700">{extractedData.professionalSummary}</p>
                 </div>
               )}
               
-              {/* Skills */}
-              {extractedData.skills.length > 0 && (
-                <div>
-                  <h5 className="font-medium text-green-800 mb-3">Skills Found ({extractedData.skills.length}):</h5>
+              {/* Profile Info */}
+              <div className="mb-4">
+                <h5 className="font-medium text-green-800 mb-2">Profile Information:</h5>
+                <div className="text-sm text-green-700 space-y-1">
+                  {extractedData.name && <p><span className="font-medium">Name:</span> {extractedData.name}</p>}
+                  {extractedData.email && <p><span className="font-medium">Email:</span> {extractedData.email}</p>}
+                  {extractedData.phone && <p><span className="font-medium">Phone:</span> {extractedData.phone}</p>}
+                  {extractedData.currentRole && <p><span className="font-medium">Role:</span> {extractedData.currentRole}</p>}
+                  {extractedData.experienceLevel && <p><span className="font-medium">Level:</span> {extractedData.experienceLevel}</p>}
+                </div>
+              </div>
+              
+              {/* Skills by Category */}
+              {extractedData.skills && (
+                <div className="space-y-4">
+                  <h5 className="font-medium text-green-800 mb-3">Skills Analysis ({extractedData.skills.length} total):</h5>
+                  
+                  {/* All Skills Display */}
                   <div className="flex flex-wrap gap-2">
                     {extractedData.skills.map((skill: string, index: number) => (
                       <span
@@ -245,6 +250,20 @@ const ResumeUpload: React.FC = () => {
                         {skill}
                       </span>
                     ))}
+                  </div>
+                  
+                  {/* Add "Upload Another" button here */}
+                  <div className="mt-4 pt-4 border-t border-green-200">
+                    <button
+                      onClick={() => {
+                        setExtractedData(null);
+                        setSuccess('');
+                        setError('');
+                      }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                    >
+                      Upload Another Resume
+                    </button>
                   </div>
                 </div>
               )}

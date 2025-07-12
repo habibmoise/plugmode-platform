@@ -242,7 +242,7 @@ export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeDat
   }
 };
 
-// 🔍 ENHANCED ARRAYBUFFER EXTRACTION with detailed logging
+// 🔍 ENHANCED ARRAYBUFFER EXTRACTION with intelligent text detection
 async function extractWithEnhancedArrayBuffer(file: File): Promise<string> {
   console.log('🧠 Starting enhanced ArrayBuffer extraction...');
   
@@ -256,71 +256,100 @@ async function extractWithEnhancedArrayBuffer(file: File): Promise<string> {
     isPdfFormat: Array.from(uint8Array.slice(0, 4)).every((b, i) => b === '%PDF'.charCodeAt(i))
   });
   
-  let textChunks: string[] = [];
-  let currentChunk = '';
-  let readableCharCount = 0;
-  let totalCharCount = 0;
+  let meaningfulTextChunks: string[] = [];
+  let currentText = '';
+  let consecutiveReadableCount = 0;
+  const minConsecutiveReadable = 10; // Need at least 10 consecutive readable chars
   
-  // More aggressive text extraction
+  // 🔥 SMARTER TEXT EXTRACTION - Look for patterns of readable text
   for (let i = 0; i < uint8Array.length; i++) {
     const byte = uint8Array[i];
-    totalCharCount++;
     
-    // Accept wider range of characters
-    if ((byte >= 32 && byte <= 126) ||     // Printable ASCII
-        (byte >= 128 && byte <= 255) ||    // Extended ASCII
-        byte === 10 || byte === 13 || byte === 9) {  // Whitespace
-      
+    // Check if this is a readable character
+    if ((byte >= 32 && byte <= 126) || byte === 10 || byte === 13 || byte === 9) {
       const char = String.fromCharCode(byte);
-      readableCharCount++;
       
-      // Skip obvious PDF artifacts but be less aggressive
-      if (!/^[%<>{}[\]()]$/.test(char)) {
-        currentChunk += char;
+      // Only include letters, numbers, and common punctuation
+      if (/[a-zA-Z0-9\s.,!?@():-]/.test(char)) {
+        currentText += char;
+        consecutiveReadableCount++;
+      } else {
+        // Reset if we hit symbols that suggest PDF structure
+        if (consecutiveReadableCount >= minConsecutiveReadable) {
+          const cleanText = currentText.trim();
+          if (cleanText.length > 20 && isLikelyResumeText(cleanText)) {
+            meaningfulTextChunks.push(cleanText);
+            console.log('📝 Found meaningful text:', cleanText.substring(0, 50) + '...');
+          }
+        }
+        currentText = '';
+        consecutiveReadableCount = 0;
       }
-      
-    } else if (currentChunk.length > 5) {
-      // Process accumulated chunk
-      const words = currentChunk.split(/\s+/)
-        .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
-        .filter(word => !isPdfArtifact(word));
-      
-      if (words.length > 1) {
-        textChunks.push(words.join(' '));
-        console.log('📝 Found text chunk:', words.slice(0, 5).join(' ') + (words.length > 5 ? '...' : ''));
+    } else {
+      // Non-readable byte - process accumulated text if meaningful
+      if (consecutiveReadableCount >= minConsecutiveReadable) {
+        const cleanText = currentText.trim();
+        if (cleanText.length > 20 && isLikelyResumeText(cleanText)) {
+          meaningfulTextChunks.push(cleanText);
+          console.log('📝 Found meaningful text:', cleanText.substring(0, 50) + '...');
+        }
       }
-      
-      currentChunk = '';
+      currentText = '';
+      consecutiveReadableCount = 0;
     }
   }
   
-  // Process final chunk
-  if (currentChunk.length > 5) {
-    const words = currentChunk.split(/\s+/)
-      .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
-      .filter(word => !isPdfArtifact(word));
-    
-    if (words.length > 1) {
-      textChunks.push(words.join(' '));
+  // Process final accumulated text
+  if (consecutiveReadableCount >= minConsecutiveReadable) {
+    const cleanText = currentText.trim();
+    if (cleanText.length > 20 && isLikelyResumeText(cleanText)) {
+      meaningfulTextChunks.push(cleanText);
+      console.log('📝 Found final meaningful text:', cleanText.substring(0, 50) + '...');
     }
   }
   
-  const extractedText = textChunks.join(' ');
+  // Combine all meaningful chunks
+  const extractedText = meaningfulTextChunks.join(' ');
   
   console.log('📊 ArrayBuffer extraction results:', {
-    totalChunks: textChunks.length,
+    totalChunks: meaningfulTextChunks.length,
     extractedLength: extractedText.length,
-    readableRatio: Math.round((readableCharCount / totalCharCount) * 100) + '%',
     preview: extractedText.substring(0, 200),
-    startsWithPdf: extractedText.toLowerCase().startsWith('%pdf')
+    containsResumeKeywords: /\b(experience|education|skills|work|job|manager|professional)\b/i.test(extractedText)
   });
   
-  if (extractedText.length > 30 && textChunks.length > 2) {
-    console.log('✅ Enhanced ArrayBuffer extraction found meaningful text');
+  if (extractedText.length > 100 && meaningfulTextChunks.length > 2) {
+    console.log('✅ Enhanced ArrayBuffer extraction found meaningful resume text');
     return extractedText;
   }
   
-  throw new Error(`ArrayBuffer extraction insufficient: ${extractedText.length} chars, ${textChunks.length} chunks`);
+  throw new Error(`ArrayBuffer extraction insufficient: ${extractedText.length} chars, ${meaningfulTextChunks.length} meaningful chunks`);
+}
+
+function isLikelyResumeText(text: string): boolean {
+  // Check if text looks like resume content
+  const resumeIndicators = [
+    /\b(experience|education|skills|summary|objective|work|job|employment|qualifications|achievements|accomplishments|projects|certifications|training|languages|references|contact|profile|career|professional|responsibilities|management|leadership|technical)\b/i,
+    /\b(manager|engineer|developer|analyst|coordinator|specialist|consultant|administrator|supervisor|director|lead|senior|junior)\b/i,
+    /\b(years?|months?|graduated|degree|university|college|company|corporation|inc|llc|ltd)\b/i,
+    /\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/, // Likely names (two capitalized words)
+    /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/, // Phone numbers
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/, // Email addresses
+  ];
+  
+  // Must have reasonable letter density
+  const letters = (text.match(/[a-zA-Z]/g) || []).length;
+  const letterRatio = letters / text.length;
+  
+  // Must not be mostly PDF artifacts
+  const pdfArtifacts = /\b(obj|endobj|stream|endstream|filter|flatedecode|length|type|subtype|basefont|encoding|font)\b/gi;
+  const artifactMatches = (text.match(pdfArtifacts) || []).length;
+  const words = text.split(/\s+/).length;
+  const artifactRatio = artifactMatches / Math.max(1, words);
+  
+  return letterRatio > 0.6 && // At least 60% letters
+         artifactRatio < 0.3 && // Less than 30% PDF artifacts
+         resumeIndicators.some(pattern => pattern.test(text)); // Has resume indicators
 }
 
 function isPdfArtifact(word: string): boolean {

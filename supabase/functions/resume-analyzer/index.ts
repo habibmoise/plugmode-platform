@@ -1,98 +1,64 @@
-// supabase/functions/resume-analyzer/index.ts - PHASE 2: OPENAI PROMPT FIX
+// supabase/functions/resume-analyzer/index.ts - PRODUCTION READY
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+// 🎯 HARDENED SECURITY - Replace with your actual domain
+const allowedOrigins = ['https://plugmode.tech', 'http://localhost:3000']
+const isDev = Deno.env.get('SUPABASE_ENV') !== 'production'
+
+// 🔥 Bulletproof CORS headers
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'Authorization, X-Client-Info, apikey, Content-Type, X-Application-Name, X-Supabase-Api-Version, x-supabase-api-version',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Max-Age': '86400',
 }
 
 serve(async (req) => {
-  // Handle CORS preflight requests
+  const origin = req.headers.get('origin') || ''
+  const isAllowedOrigin = allowedOrigins.includes(origin)
+
+  if (isDev) console.log('🔗 Request from origin:', origin)
+
+  // ✅ CORS Preflight response - BULLETPROOF
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+    if (isDev) console.log('🛫 CORS preflight handled')
+    return new Response('ok', {
+      status: 204,
+      headers: {
+        ...corsHeaders,
+        'Access-Control-Allow-Origin': isAllowedOrigin ? origin : allowedOrigins[0],
+      },
+    })
   }
 
   try {
     const { text, fileName, extractionMetrics } = await req.json()
 
-    console.log('🔍 Resume Analysis Request:', {
-      fileName,
-      textLength: text?.length || 0,
-      extractionQuality: extractionMetrics?.textQuality || 'unknown'
-    })
+    if (isDev) console.log('📦 Processing:', { fileName, textLength: text?.length || 0 })
 
     // Validate input
     if (!text || text.length < 50) {
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Text too short for analysis',
-          data: null
-        }),
-        { 
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        }
-      )
+      return jsonResponse(400, { 
+        success: false, 
+        error: 'Resume text too short for analysis' 
+      }, origin)
     }
 
-    // Get OpenAI API key
+    // Check OpenAI API key
     const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
-    if (!openaiApiKey) {
-      console.error('❌ OpenAI API key not found')
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'OpenAI API key not configured',
-          data: null
-        }),
-        { 
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        }
-      )
+    if (!openaiApiKey || !openaiApiKey.startsWith('sk-')) {
+      console.error('❌ Invalid OpenAI API Key')
+      return jsonResponse(500, { 
+        success: false, 
+        error: 'OpenAI API key not configured properly' 
+      }, origin)
     }
 
-    console.log('🤖 Calling OpenAI with enhanced prompt...')
+    if (isDev) console.log('🚀 Calling OpenAI...')
 
-    // ENHANCED OPENAI PROMPT - PHASE 2 FIX
-    const prompt = `You are a senior HR analyst and resume parsing expert analyzing a real resume document.
+    // Enhanced prompt for better extraction
+    const prompt = createPrompt(text)
 
-CRITICAL INSTRUCTIONS:
-1. Extract ACTUAL information from the provided resume text - do NOT use placeholder data
-2. Find the candidate's real name, contact information, and experience
-3. Extract ALL skills mentioned or implied in the resume content
-4. Categorize skills into: technical, business, soft, and industry-specific
-5. Include skill variations and synonyms (e.g., "project management" = "PM", "project coordination")
-6. Determine experience level based on job titles, years, and responsibilities
-7. Write a professional summary based on the actual resume content
-
-RESUME TEXT TO ANALYZE:
-${text.substring(0, 8000)}
-
-Return ONLY valid JSON in this exact format:
-{
-  "personalInfo": {
-    "name": "actual candidate name from resume",
-    "email": "actual email if found",
-    "phone": "actual phone if found", 
-    "location": "actual location if found"
-  },
-  "currentRole": "most recent job title from resume",
-  "experienceLevel": "Entry|Mid|Senior|Executive based on experience",
-  "professionalSummary": "2-3 sentence summary based on actual resume content",
-  "skills": {
-    "technical": ["actual technical skills found"],
-    "business": ["actual business skills found"],
-    "soft": ["actual soft skills found"],
-    "industry": ["actual industry-specific skills found"]
-  }
-}
-
-IMPORTANT: Extract real information from the resume text provided above. Do not use template or placeholder values.`
-
-    // Call OpenAI API
+    // Call OpenAI with proper error handling
     const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -101,185 +67,249 @@ IMPORTANT: Extract real information from the resume text provided above. Do not 
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
+        messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: 1500,
-        response_format: { type: "json_object" }
+        // Removed problematic response_format
       }),
     })
 
     if (!openaiResponse.ok) {
-      const errorData = await openaiResponse.text()
-      console.error('❌ OpenAI API Error:', errorData)
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: `OpenAI API error: ${openaiResponse.status}`,
-          data: null
-        }),
-        { 
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        }
-      )
-    }
-
-    const openaiData = await openaiResponse.json()
-    console.log('🤖 OpenAI Response received:', {
-      usage: openaiData.usage,
-      hasChoices: !!openaiData.choices?.length
-    })
-
-    let analysisResult
-    try {
-      const content = openaiData.choices[0]?.message?.content
-      if (!content) {
-        throw new Error('No content in OpenAI response')
-      }
+      const errorText = await openaiResponse.text()
+      console.error('❌ OpenAI API error:', openaiResponse.status)
+      if (isDev) console.error('OpenAI error details:', errorText)
       
-      analysisResult = JSON.parse(content)
-      console.log('✅ Parsed OpenAI result:', {
-        hasName: !!analysisResult.personalInfo?.name,
-        skillsFound: {
-          technical: analysisResult.skills?.technical?.length || 0,
-          business: analysisResult.skills?.business?.length || 0,
-          soft: analysisResult.skills?.soft?.length || 0,
-          industry: analysisResult.skills?.industry?.length || 0
-        }
-      })
-    } catch (parseError) {
-      console.error('❌ Failed to parse OpenAI response:', parseError)
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Failed to parse AI analysis',
-          data: null
-        }),
-        { 
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        }
-      )
-    }
-
-    // ENHANCED FALLBACK - If OpenAI returns poor results
-    const totalSkills = (analysisResult.skills?.technical?.length || 0) +
-                       (analysisResult.skills?.business?.length || 0) +
-                       (analysisResult.skills?.soft?.length || 0) +
-                       (analysisResult.skills?.industry?.length || 0)
-
-    if (totalSkills < 3 || 
-        analysisResult.personalInfo?.name === 'Full Name' ||
-        analysisResult.personalInfo?.email === 'email@domain.com') {
-      
-      console.log('🔧 OpenAI returned poor results, enhancing with pattern matching...')
-      
-      // Pattern-based skill extraction as fallback
-      const skillPatterns = {
-        technical: [
-          'JavaScript', 'Python', 'Java', 'C++', 'React', 'Node.js', 'SQL', 'HTML', 'CSS',
-          'AWS', 'Azure', 'Docker', 'Kubernetes', 'Git', 'Jenkins', 'MongoDB', 'PostgreSQL',
-          'Machine Learning', 'AI', 'Data Science', 'Analytics', 'Excel', 'Power BI', 'Tableau'
-        ],
-        business: [
-          'Project Management', 'Leadership', 'Strategy', 'Business Development', 'Sales',
-          'Marketing', 'Customer Service', 'Account Management', 'Budget Management',
-          'Process Improvement', 'Change Management', 'Strategic Planning', 'Negotiation'
-        ],
-        soft: [
-          'Communication', 'Teamwork', 'Problem Solving', 'Critical Thinking', 'Adaptability',
-          'Time Management', 'Attention to Detail', 'Creativity', 'Initiative', 'Collaboration'
-        ],
-        industry: [
-          'Healthcare', 'Finance', 'Technology', 'Education', 'Retail', 'Manufacturing',
-          'Consulting', 'Real Estate', 'Insurance', 'Telecommunications', 'Government'
-        ]
-      }
-
-      const enhancedSkills = {
-        technical: [],
-        business: [],
-        soft: [],
-        industry: []
-      }
-
-      const textLower = text.toLowerCase()
-      
-      for (const [category, skills] of Object.entries(skillPatterns)) {
-        for (const skill of skills) {
-          if (textLower.includes(skill.toLowerCase())) {
-            enhancedSkills[category].push(skill)
-          }
-        }
-      }
-
-      // Merge with OpenAI results
-      analysisResult.skills = {
-        technical: [...(analysisResult.skills?.technical || []), ...enhancedSkills.technical],
-        business: [...(analysisResult.skills?.business || []), ...enhancedSkills.business],
-        soft: [...(analysisResult.skills?.soft || []), ...enhancedSkills.soft],
-        industry: [...(analysisResult.skills?.industry || []), ...enhancedSkills.industry]
-      }
-
-      // Remove duplicates
-      for (const category of Object.keys(analysisResult.skills)) {
-        analysisResult.skills[category] = [...new Set(analysisResult.skills[category])]
-      }
-
-      console.log('🚀 Enhanced skills extraction completed:', {
-        technical: analysisResult.skills.technical.length,
-        business: analysisResult.skills.business.length,
-        soft: analysisResult.skills.soft.length,
-        industry: analysisResult.skills.industry.length
-      })
-    }
-
-    // Calculate final statistics
-    const finalTotalSkills = (analysisResult.skills?.technical?.length || 0) +
-                            (analysisResult.skills?.business?.length || 0) +
-                            (analysisResult.skills?.soft?.length || 0) +
-                            (analysisResult.skills?.industry?.length || 0)
-
-    const analysisType = totalSkills >= 3 ? 'ai-analysis' : 'enhanced-pattern-matching'
-    const textQuality = extractionMetrics?.textQuality || Math.min(100, Math.round((text.length / 1000) * 10))
-
-    console.log('✅ Analysis completed:', {
-      analysisType,
-      totalSkills: finalTotalSkills,
-      textQuality: `${textQuality}%`,
-      hasName: !!analysisResult.personalInfo?.name && analysisResult.personalInfo.name !== 'Full Name'
-    })
-
-    return new Response(
-      JSON.stringify({
-        success: true,
-        data: analysisResult,
-        analysisType,
-        textQuality,
-        skillsExtracted: finalTotalSkills
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      }
-    )
-
-  } catch (error) {
-    console.error('❌ Resume analysis error:', error)
-    return new Response(
-      JSON.stringify({ 
+      return jsonResponse(502, { 
         success: false, 
-        error: error.message || 'Analysis failed',
-        data: null
-      }),
-      { 
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      }
-    )
+        error: `OpenAI API error: ${openaiResponse.status}` 
+      }, origin)
+    }
+
+    const aiData = await openaiResponse.json()
+    const content = aiData?.choices?.[0]?.message?.content
+
+    if (!content) {
+      throw new Error('No content received from OpenAI')
+    }
+
+    if (isDev) console.log('📋 OpenAI response preview:', content.substring(0, 100))
+
+    // 🛡️ SAFE JSON PARSING - Prevents crashes
+    const analysisResult = safeJsonParse(content)
+
+    if (!analysisResult) {
+      console.warn('⚠️ Failed to parse OpenAI JSON, using fallback')
+      // Create fallback structure
+      const fallbackResult = createFallbackStructure(text, fileName)
+      const enrichedResult = enhanceSkillsFallback(text, fallbackResult)
+      
+      return jsonResponse(200, {
+        success: true,
+        data: enrichedResult,
+        analysisType: 'fallback-pattern-matching',
+        textQuality: calcTextQuality(text),
+        skillsExtracted: countSkills(enrichedResult.skills),
+      }, origin)
+    }
+
+    // Enhance with fallback patterns if OpenAI found few skills
+    const enrichedResult = enhanceSkillsFallback(text, analysisResult)
+    const totalSkills = countSkills(enrichedResult.skills)
+
+    if (isDev) console.log('✅ Analysis complete:', {
+      name: sanitizeForLog(enrichedResult.personalInfo?.name),
+      totalSkills,
+      analysisType: totalSkills > 5 ? 'ai-analysis' : 'enhanced-fallback'
+    })
+
+    return jsonResponse(200, {
+      success: true,
+      data: enrichedResult,
+      analysisType: totalSkills > 5 ? 'ai-analysis' : 'enhanced-fallback',
+      textQuality: extractionMetrics?.textQuality || calcTextQuality(text),
+      skillsExtracted: totalSkills,
+    }, origin)
+
+  } catch (err) {
+    console.error('💥 Resume analyzer error:', err.message)
+    if (isDev) console.error('Error stack:', err.stack)
+    
+    return jsonResponse(500, { 
+      success: false, 
+      error: 'Analysis failed due to server error' 
+    }, origin)
   }
 })
+
+// 🔧 Helper Functions
+
+function jsonResponse(status: number, body: unknown, origin: string) {
+  const isAllowedOrigin = allowedOrigins.includes(origin)
+  
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      'Access-Control-Allow-Origin': isAllowedOrigin ? origin : allowedOrigins[0],
+      'Content-Type': 'application/json',
+    },
+  })
+}
+
+function createPrompt(text: string): string {
+  return `You are a senior HR analyst parsing resumes. Extract REAL information from this resume text.
+
+RESUME TEXT:
+${text.slice(0, 8000)}
+
+Return ONLY valid JSON in this exact format:
+{
+  "personalInfo": {
+    "name": "actual candidate name from resume",
+    "email": "actual email if found",
+    "phone": "actual phone if found",
+    "location": "actual location if found"
+  },
+  "currentRole": "most recent job title from resume",
+  "experienceLevel": "Entry|Mid|Senior|Executive",
+  "professionalSummary": "2-3 sentence summary based on actual resume content",
+  "skills": {
+    "technical": ["actual technical skills found"],
+    "business": ["actual business skills found"],
+    "soft": ["actual soft skills found"],
+    "industry": ["actual industry skills found"]
+  }
+}
+
+IMPORTANT: Extract real information from the resume text. Do not use placeholder values like "Full Name" or "email@domain.com".`
+}
+
+function safeJsonParse(content: string) {
+  try {
+    // Clean common JSON formatting issues
+    const cleanContent = content
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
+      .trim()
+    
+    const parsed = JSON.parse(cleanContent)
+    
+    // Validate structure
+    if (!parsed.personalInfo || !parsed.skills) {
+      return null
+    }
+    
+    return parsed
+  } catch (error) {
+    console.warn('⚠️ JSON parse failed:', error.message)
+    return null
+  }
+}
+
+function createFallbackStructure(text: string, fileName: string) {
+  return {
+    personalInfo: {
+      name: extractNameFromFilename(fileName),
+      email: extractEmail(text),
+      phone: extractPhone(text),
+      location: ''
+    },
+    currentRole: 'Professional',
+    experienceLevel: 'Mid',
+    professionalSummary: 'Professional with diverse experience and skills.',
+    skills: {
+      technical: [],
+      business: [],
+      soft: [],
+      industry: []
+    }
+  }
+}
+
+function enhanceSkillsFallback(text: string, result: any) {
+  const skillPatterns = {
+    technical: [
+      'JavaScript', 'Python', 'Java', 'React', 'Node.js', 'SQL', 'HTML', 'CSS',
+      'AWS', 'Azure', 'Docker', 'Git', 'MongoDB', 'PostgreSQL', 'Excel', 'Power BI',
+      'Tableau', 'Machine Learning', 'Data Analysis', 'Analytics'
+    ],
+    business: [
+      'Project Management', 'Leadership', 'Sales', 'Marketing', 'CRM',
+      'Customer Service', 'Account Management', 'Business Development',
+      'Strategic Planning', 'Budget Management', 'Team Management', 'Operations',
+      'Process Improvement', 'Quality Assurance', 'Negotiation'
+    ],
+    soft: [
+      'Communication', 'Teamwork', 'Problem Solving', 'Leadership',
+      'Time Management', 'Adaptability', 'Critical Thinking', 'Collaboration',
+      'Presentation', 'Writing', 'Public Speaking', 'Creativity'
+    ],
+    industry: [
+      'Healthcare', 'Finance', 'Technology', 'Education', 'Retail',
+      'Manufacturing', 'Consulting', 'Real Estate', 'Insurance',
+      'Telecommunications', 'Government', 'Non-profit'
+    ]
+  }
+
+  const textLower = text.toLowerCase()
+  
+  for (const [category, skills] of Object.entries(skillPatterns)) {
+    const categorySkills = result.skills?.[category] || []
+    
+    for (const skill of skills) {
+      // Use word boundaries for better matching
+      const regex = new RegExp(`\\b${skill.toLowerCase()}\\b`, 'i')
+      if (regex.test(textLower) && !categorySkills.includes(skill)) {
+        categorySkills.push(skill)
+      }
+    }
+    
+    // Remove duplicates and update
+    result.skills[category] = Array.from(new Set(categorySkills))
+  }
+  
+  return result
+}
+
+function countSkills(skills: any) {
+  if (!skills) return 0
+  return Object.values(skills).reduce((acc: number, arr: any) => {
+    return acc + (Array.isArray(arr) ? arr.length : 0)
+  }, 0)
+}
+
+function calcTextQuality(text: string) {
+  const wordCount = text.split(/\s+/).length
+  const charCount = text.length
+  
+  // Quality based on length and word density
+  const lengthScore = Math.min(100, (charCount / 2000) * 50)
+  const densityScore = Math.min(100, (wordCount / charCount) * 1000)
+  
+  return Math.round((lengthScore + densityScore) / 2)
+}
+
+function extractNameFromFilename(fileName: string): string {
+  const nameWithoutExt = fileName.replace(/\.[^/.]+$/, '')
+  return nameWithoutExt
+    .replace(/[-_]/g, ' ')
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
+}
+
+function extractEmail(text: string): string {
+  const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/)
+  return emailMatch ? emailMatch[0] : ''
+}
+
+function extractPhone(text: string): string {
+  const phoneMatch = text.match(/(\+?1?[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/)
+  return phoneMatch ? phoneMatch[0] : ''
+}
+
+function sanitizeForLog(value: string | undefined): string {
+  if (!value || isDev) return value || 'N/A'
+  // In production, mask PII
+  return value.length > 2 ? value.charAt(0) + '*'.repeat(value.length - 2) + value.charAt(value.length - 1) : '***'
+}

@@ -1,4 +1,4 @@
-// supabase/functions/resume-analyzer/index.ts - FINAL VERSION WITH REAL AI
+// supabase/functions/resume-analyzer/index.ts - WORKING OPENAI INTEGRATION
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 
 const corsHeaders = {
@@ -8,6 +8,7 @@ const corsHeaders = {
 }
 
 Deno.serve(async (req) => {
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -15,278 +16,252 @@ Deno.serve(async (req) => {
   try {
     const { text, fileName } = await req.json()
     
-    console.log('📄 FINAL analyzer called with text length:', text?.length || 0)
-    console.log('📄 First 500 chars:', text?.substring(0, 500))
+    console.log('🔍 OPENAI INTEGRATION: Function called with text length:', text?.length || 0)
+    console.log('📁 File name:', fileName)
 
-    // Get OpenAI API key from environment
+    // Check OpenAI API key
     const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
-    
+    console.log('🔑 OpenAI key exists:', !!openaiApiKey)
+    console.log('🔑 Key prefix:', openaiApiKey?.substring(0, 10))
+
     if (!openaiApiKey) {
-      console.error('❌ No OpenAI API key found')
-      return fallbackAnalysis(text, fileName)
+      console.error('❌ CRITICAL: No OpenAI API key found in environment')
+      throw new Error('OpenAI API key not configured')
     }
 
-    // REAL OpenAI Analysis
-    try {
-      console.log('🤖 Using REAL OpenAI analysis...')
-      
-      const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
-          messages: [
+    console.log('🤖 Making OpenAI API call...')
+    
+    // Call OpenAI API
+    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert resume analyzer. Extract detailed information from the resume text and return ONLY a valid JSON object with this exact structure:
             {
-              role: 'system',
-              content: `You are an expert resume analyzer. Extract information from the resume text and return a JSON object with:
-              {
-                "personalInfo": {
-                  "name": "Full name of the person",
-                  "email": "Email address",
-                  "phone": "Phone number", 
-                  "location": "City, State/Country"
-                },
-                "currentRole": "Current job title or most recent position",
-                "experienceLevel": "Entry Level/Mid Level/Senior Level/Executive Level",
-                "skills": {
-                  "technical": ["Technical skills like software, tools, programming languages"],
-                  "business": ["Business skills like sales, marketing, management"],
-                  "soft": ["Soft skills like communication, leadership, problem-solving"],
-                  "industry": ["Industry-specific skills"]
-                },
-                "professionalSummary": "2-3 sentence summary of their background and expertise",
-                "keyStrengths": ["Top 8 most important skills/strengths"],
-                "totalExperience": "Number of years of experience (estimate)"
-              }
-
-              Be very thorough in skill extraction. Look for:
-              - Job titles and responsibilities 
-              - Technologies and tools mentioned
-              - Educational background
-              - Certifications
-              - Industry experience
-              - Leadership and management experience
-              - Languages spoken
-              - Software proficiency
-
-              Extract the person's actual name, not the filename. Look carefully at the beginning of the resume.`
-            },
-            {
-              role: 'user',
-              content: `Please analyze this resume and extract comprehensive information:\n\n${text.substring(0, 8000)}`
+              "personalInfo": {
+                "name": "Full name of the person",
+                "email": "email@domain.com",
+                "phone": "phone number",
+                "location": "city, state/country"
+              },
+              "currentRole": "Current job title or most recent position",
+              "experienceLevel": "Entry Level, Mid Level, Senior Level, or Executive Level",
+              "skills": {
+                "technical": ["technical skills like software, programming languages, tools"],
+                "business": ["business skills like sales, marketing, management"],
+                "soft": ["soft skills like communication, leadership"],
+                "industry": ["industry-specific skills"]
+              },
+              "professionalSummary": "2-3 sentence summary of background and expertise",
+              "keyStrengths": ["top 8 most important skills/strengths"]
             }
-          ],
-          max_tokens: 1500,
-          temperature: 0.1
-        })
-      })
 
-      if (!openaiResponse.ok) {
-        console.error('❌ OpenAI API error:', openaiResponse.status, await openaiResponse.text())
-        throw new Error(`OpenAI API error: ${openaiResponse.status}`)
-      }
-
-      const openaiData = await openaiResponse.json()
-      console.log('✅ OpenAI response received')
-      
-      const aiAnalysis = JSON.parse(openaiData.choices[0].message.content)
-      console.log('🎯 AI Analysis:', aiAnalysis)
-
-      // Count total skills
-      const totalSkills = [
-        ...(aiAnalysis.skills?.technical || []),
-        ...(aiAnalysis.skills?.business || []),
-        ...(aiAnalysis.skills?.soft || []),
-        ...(aiAnalysis.skills?.industry || [])
-      ].length
-
-      console.log('📊 Total skills extracted:', totalSkills)
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          data: {
-            personalInfo: aiAnalysis.personalInfo || {},
-            currentRole: aiAnalysis.currentRole || 'Professional',
-            experienceLevel: aiAnalysis.experienceLevel || 'Mid Level',
-            skills: aiAnalysis.skills || { technical: [], business: [], soft: [], industry: [] },
-            professionalSummary: aiAnalysis.professionalSummary || 'Experienced professional with diverse skill set.',
-            keyStrengths: aiAnalysis.keyStrengths || [],
-            totalExperience: aiAnalysis.totalExperience || 'Not specified',
-            remoteWorkReady: true
+            IMPORTANT: 
+            - Extract the person's actual name, not filename
+            - Be comprehensive with skills - look for ALL mentioned abilities
+            - Include programming languages, frameworks, tools, certifications
+            - Include business skills like project management, leadership
+            - Include soft skills mentioned or implied
+            - Return ONLY the JSON object, no additional text`
           },
-          analysisType: 'openai-powered',
-          totalSkillsFound: totalSkills
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+          {
+            role: 'user',
+            content: `Please analyze this resume and extract comprehensive information:\n\n${text.substring(0, 12000)}`
+          }
+        ],
+        max_tokens: 2000,
+        temperature: 0.1,
+        response_format: { type: "json_object" }
+      })
+    })
 
-    } catch (openaiError) {
-      console.error('❌ OpenAI analysis failed:', openaiError)
-      console.log('🔄 Falling back to enhanced analysis...')
-      return fallbackAnalysis(text, fileName)
+    console.log('📡 OpenAI response status:', openaiResponse.status)
+
+    if (!openaiResponse.ok) {
+      const errorText = await openaiResponse.text()
+      console.error('❌ OpenAI API error:', openaiResponse.status, errorText)
+      throw new Error(`OpenAI API error: ${openaiResponse.status} - ${errorText}`)
     }
+
+    const openaiData = await openaiResponse.json()
+    console.log('✅ OpenAI response received successfully')
+    
+    let aiAnalysis
+    try {
+      const content = openaiData.choices[0].message.content
+      console.log('🔍 Raw OpenAI content:', content.substring(0, 200) + '...')
+      aiAnalysis = JSON.parse(content)
+      console.log('✅ Successfully parsed OpenAI JSON')
+    } catch (parseError) {
+      console.error('❌ Failed to parse OpenAI JSON:', parseError)
+      throw new Error('OpenAI returned invalid JSON format')
+    }
+
+    // Count total skills
+    const totalSkills = [
+      ...(aiAnalysis.skills?.technical || []),
+      ...(aiAnalysis.skills?.business || []),
+      ...(aiAnalysis.skills?.soft || []),
+      ...(aiAnalysis.skills?.industry || [])
+    ].length
+
+    console.log('📊 AI extracted', totalSkills, 'total skills')
+    console.log('👤 Extracted name:', aiAnalysis.personalInfo?.name)
+    console.log('💼 Detected role:', aiAnalysis.currentRole)
+
+    // Format response
+    const result = {
+      personalInfo: aiAnalysis.personalInfo || {
+        name: fileName?.replace(/\.(pdf|doc|docx)$/i, '').replace(/[-_]/g, ' ') || 'Professional',
+        email: '',
+        phone: '',
+        location: ''
+      },
+      currentRole: aiAnalysis.currentRole || 'Professional',
+      experienceLevel: aiAnalysis.experienceLevel || 'Mid Level',
+      skills: aiAnalysis.skills || { technical: [], business: [], soft: [], industry: [] },
+      professionalSummary: aiAnalysis.professionalSummary || 'Experienced professional with diverse skill set.',
+      keyStrengths: aiAnalysis.keyStrengths || [],
+      remoteWorkReady: true
+    }
+
+    console.log('✅ Final result prepared with', totalSkills, 'skills')
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: result,
+        analysisType: 'openai-powered',
+        totalSkillsFound: totalSkills
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
 
   } catch (error) {
     console.error('❌ Function error:', error)
     
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: error.message,
-        fallback: 'Please try uploading a text-based PDF or Word document'
-      }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    // Enhanced fallback with better skill detection
+    console.log('🔄 Using enhanced fallback analysis...')
+    
+    const text = req.body?.text || ''
+    const fileName = req.body?.fileName || 'resume.pdf'
+    
+    return enhancedFallbackAnalysis(text, fileName)
   }
 })
 
-function fallbackAnalysis(text: string, fileName: string) {
-  console.log('🔄 Using fallback analysis...')
+function enhancedFallbackAnalysis(text: string, fileName: string) {
+  console.log('🔄 Enhanced fallback analysis starting...')
   
   const textLower = text.toLowerCase()
+  const skills = {
+    technical: [] as string[],
+    business: [] as string[],
+    soft: [] as string[],
+    industry: [] as string[]
+  }
   
-  // Enhanced name extraction
-  const namePatterns = [
-    // Look for name patterns at the beginning
-    /^([A-Z][a-z]+ [A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/m,
-    // Look for "Name:" pattern
-    /name[:\s]+([A-Za-z\s]{2,50})/i,
-    // Look for email prefix (name before @)
-    /([a-z]+\.?[a-z]+)@/i
+  // Comprehensive skill detection patterns
+  const skillPatterns = [
+    // Programming & Technical
+    { pattern: /\b(javascript|js|node\.?js|react|angular|vue)\b/i, skill: 'JavaScript', category: 'technical' },
+    { pattern: /\b(python|django|flask|pandas|numpy)\b/i, skill: 'Python', category: 'technical' },
+    { pattern: /\b(java|spring|hibernate)\b/i, skill: 'Java', category: 'technical' },
+    { pattern: /\b(html|css|frontend|front.end)\b/i, skill: 'Frontend Development', category: 'technical' },
+    { pattern: /\b(sql|mysql|postgresql|database)\b/i, skill: 'Database Management', category: 'technical' },
+    { pattern: /\b(aws|azure|cloud|docker|kubernetes)\b/i, skill: 'Cloud Technologies', category: 'technical' },
+    { pattern: /\b(git|github|version control)\b/i, skill: 'Version Control', category: 'technical' },
+    
+    // Sales & Business
+    { pattern: /\b(salesforce|sfdc|crm)\b/i, skill: 'Salesforce CRM', category: 'technical' },
+    { pattern: /\b(sales|selling|revenue)\b/i, skill: 'Sales', category: 'business' },
+    { pattern: /\b(business development|bizdev|bd)\b/i, skill: 'Business Development', category: 'business' },
+    { pattern: /\b(account management|client management)\b/i, skill: 'Account Management', category: 'business' },
+    { pattern: /\b(project management|pmp|agile|scrum)\b/i, skill: 'Project Management', category: 'business' },
+    { pattern: /\b(strategic planning|strategy)\b/i, skill: 'Strategic Planning', category: 'business' },
+    { pattern: /\b(budget|financial|finance)\b/i, skill: 'Financial Management', category: 'business' },
+    { pattern: /\b(marketing|digital marketing|seo)\b/i, skill: 'Marketing', category: 'business' },
+    
+    // Soft Skills
+    { pattern: /\b(leadership|leading|lead|manage|management)\b/i, skill: 'Leadership', category: 'soft' },
+    { pattern: /\b(communication|presenting|presentation)\b/i, skill: 'Communication', category: 'soft' },
+    { pattern: /\b(team|collaboration|teamwork)\b/i, skill: 'Team Collaboration', category: 'soft' },
+    { pattern: /\b(problem.solving|troubleshooting|analytical)\b/i, skill: 'Problem Solving', category: 'soft' },
+    { pattern: /\b(training|mentoring|coaching)\b/i, skill: 'Training & Development', category: 'soft' },
+    { pattern: /\b(negotiation|negotiating)\b/i, skill: 'Negotiation', category: 'soft' },
+    
+    // Tools & Software
+    { pattern: /\b(excel|spreadsheet|powerpoint|office)\b/i, skill: 'Microsoft Office', category: 'technical' },
+    { pattern: /\b(tableau|power.?bi|analytics)\b/i, skill: 'Data Analytics', category: 'technical' },
+    { pattern: /\b(jira|asana|trello)\b/i, skill: 'Project Management Tools', category: 'technical' },
+    
+    // Industry
+    { pattern: /\b(saas|software.as.a.service)\b/i, skill: 'SaaS', category: 'industry' },
+    { pattern: /\b(b2b|business.to.business)\b/i, skill: 'B2B', category: 'industry' },
+    { pattern: /\b(healthcare|medical|pharmaceutical)\b/i, skill: 'Healthcare', category: 'industry' },
+    { pattern: /\b(fintech|financial.services|banking)\b/i, skill: 'Financial Services', category: 'industry' }
   ]
   
-  let extractedName = ''
-  for (const pattern of namePatterns) {
-    const match = text.match(pattern)
-    if (match && match[1] && !match[1].toLowerCase().includes('resume')) {
-      extractedName = match[1].trim()
-      break
-    }
-  }
-  
-  // Enhanced skill extraction with comprehensive database
-  const skillDatabase = {
-    technical: {
-      'Salesforce': ['salesforce', 'sfdc'],
-      'Microsoft Excel': ['excel', 'spreadsheet'],
-      'PowerPoint': ['powerpoint', 'ppt'],
-      'CRM Systems': ['crm', 'customer relationship'],
-      'Data Analysis': ['data analysis', 'analytics'],
-      'SQL': ['sql', 'database'],
-      'Microsoft Office': ['microsoft office', 'ms office'],
-      'Google Analytics': ['google analytics'],
-      'HubSpot': ['hubspot'],
-      'Tableau': ['tableau'],
-      'Power BI': ['power bi', 'powerbi']
-    },
-    business: {
-      'Sales Management': ['sales management', 'sales manager'],
-      'Business Development': ['business development', 'biz dev'],
-      'Account Management': ['account management', 'account manager'],
-      'Project Management': ['project management', 'project manager'],
-      'Strategic Planning': ['strategic planning', 'strategy'],
-      'Revenue Growth': ['revenue growth', 'revenue'],
-      'Pipeline Management': ['pipeline', 'sales pipeline'],
-      'Lead Generation': ['lead generation', 'lead gen'],
-      'Market Research': ['market research'],
-      'Budget Management': ['budget management', 'budget'],
-      'Partnership Development': ['partnership', 'partnerships'],
-      'Stakeholder Management': ['stakeholder'],
-      'Operations Management': ['operations'],
-      'Training & Development': ['training', 'development'],
-      'Customer Success': ['customer success'],
-      'Sales Operations': ['sales operations', 'sales ops']
-    },
-    soft: {
-      'Leadership': ['leadership', 'lead', 'leading'],
-      'Communication': ['communication', 'communicate'],
-      'Team Management': ['team management', 'manage team'],
-      'Problem Solving': ['problem solving', 'troubleshoot'],
-      'Negotiation': ['negotiation', 'negotiate'],
-      'Presentation': ['presentation', 'presenting'],
-      'Critical Thinking': ['critical thinking'],
-      'Time Management': ['time management'],
-      'Adaptability': ['adaptability', 'flexible'],
-      'Mentoring': ['mentoring', 'coaching'],
-      'Cross-functional Collaboration': ['cross-functional', 'collaboration'],
-      'Relationship Building': ['relationship building']
-    },
-    industry: {
-      'B2B Sales': ['b2b', 'business to business'],
-      'SaaS': ['saas', 'software as a service'],
-      'Enterprise Sales': ['enterprise'],
-      'International Business': ['international', 'global'],
-      'Financial Services': ['financial', 'finance'],
-      'Technology': ['technology', 'tech'],
-      'Healthcare': ['healthcare', 'medical'],
-      'Education': ['education', 'educational'],
-      'Consulting': ['consulting', 'consultant']
-    }
-  }
-  
-  const foundSkills: any = { technical: [], business: [], soft: [], industry: [] }
-  
-  // Extract skills from each category
-  Object.entries(skillDatabase).forEach(([category, skills]) => {
-    Object.entries(skills).forEach(([skill, patterns]) => {
-      if (patterns.some(pattern => textLower.includes(pattern))) {
-        foundSkills[category].push(skill)
+  // Extract skills using patterns
+  skillPatterns.forEach(({ pattern, skill, category }) => {
+    if (pattern.test(textLower)) {
+      if (!skills[category as keyof typeof skills].includes(skill)) {
+        skills[category as keyof typeof skills].push(skill)
       }
-    })
+    }
   })
   
-  // Extract email
-  const emailMatch = text.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g)
-  const email = emailMatch?.[0] || ''
+  // Extract basic personal info
+  const emailMatch = text.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)?.[1] || ''
+  const phoneMatch = text.match(/(\+?[\d\s\-\(\)]{8,15})/)?.[1]?.replace(/[^\d\+]/g, '') || ''
   
-  // Extract phone
-  const phoneMatch = text.match(/(\+?[\d\s\-\(\)]{8,15})/g)
-  const phone = phoneMatch?.[0]?.replace(/[^\d\+]/g, '') || ''
-  
-  // Determine role and experience
+  // Determine role
   let currentRole = 'Professional'
-  if (textLower.includes('manager')) currentRole = 'Manager'
-  if (textLower.includes('director')) currentRole = 'Director'
-  if (textLower.includes('sales')) currentRole = 'Sales Professional'
-  if (textLower.includes('developer')) currentRole = 'Developer'
+  if (/developer|engineer|programmer/i.test(textLower)) currentRole = 'Software Developer'
+  else if (/sales.*manager|account.*manager/i.test(textLower)) currentRole = 'Sales Manager'
+  else if (/project.*manager/i.test(textLower)) currentRole = 'Project Manager'
+  else if (/marketing.*manager/i.test(textLower)) currentRole = 'Marketing Manager'
+  else if (/manager/i.test(textLower)) currentRole = 'Manager'
   
+  // Experience level
   let experienceLevel = 'Mid Level'
-  if (textLower.includes('senior') || textLower.includes('lead')) experienceLevel = 'Senior Level'
-  if (textLower.includes('director') || textLower.includes('vp')) experienceLevel = 'Executive Level'
-  if (textLower.includes('junior') || textLower.includes('entry')) experienceLevel = 'Entry Level'
+  if (/senior|lead|principal/i.test(textLower)) experienceLevel = 'Senior Level'
+  else if (/director|vp|head.of/i.test(textLower)) experienceLevel = 'Executive Level'
+  else if (/junior|entry|associate|intern/i.test(textLower)) experienceLevel = 'Entry Level'
   
-  const allSkills = [
-    ...foundSkills.technical,
-    ...foundSkills.business,
-    ...foundSkills.soft,
-    ...foundSkills.industry
-  ]
+  const totalSkills = skills.technical.length + skills.business.length + skills.soft.length + skills.industry.length
   
-  console.log('📊 Fallback analysis found:', allSkills.length, 'skills')
+  console.log('📊 Fallback extracted', totalSkills, 'skills')
+  console.log('💼 Detected role:', currentRole)
+  
+  const result = {
+    personalInfo: {
+      name: fileName?.replace(/\.(pdf|doc|docx)$/i, '').replace(/[-_]/g, ' ').replace(/resume/gi, '').trim() || 'Professional',
+      email: emailMatch,
+      phone: phoneMatch,
+      location: ''
+    },
+    currentRole: currentRole,
+    experienceLevel: experienceLevel,
+    skills: skills,
+    professionalSummary: `Experienced ${currentRole.toLowerCase()} with demonstrated expertise in ${skills.business[0] || skills.technical[0] || 'professional development'}.`,
+    keyStrengths: [...skills.business.slice(0, 3), ...skills.technical.slice(0, 3), ...skills.soft.slice(0, 2)],
+    remoteWorkReady: true
+  }
   
   return new Response(
     JSON.stringify({
       success: true,
-      data: {
-        personalInfo: {
-          name: extractedName || fileName.replace(/\.(pdf|doc|docx)$/i, '').replace(/[-_]/g, ' '),
-          email: email,
-          phone: phone,
-          location: ''
-        },
-        currentRole: currentRole,
-        experienceLevel: experienceLevel,
-        skills: foundSkills,
-        professionalSummary: `Experienced ${currentRole.toLowerCase()} with expertise in ${foundSkills.business.slice(0, 2).join(', ')}.`,
-        keyStrengths: allSkills.slice(0, 8),
-        remoteWorkReady: true
-      },
+      data: result,
       analysisType: 'enhanced-fallback',
-      totalSkillsFound: allSkills.length
+      totalSkillsFound: totalSkills
     }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   )

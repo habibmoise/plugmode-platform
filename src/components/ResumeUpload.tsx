@@ -1,8 +1,9 @@
-// src/components/ResumeUpload.tsx - FINAL WORKING VERSION
+// src/components/ResumeUpload.tsx - WITH ROBUST PDF PROCESSING
 import React, { useState } from 'react';
-import { FileText, CheckCircle, AlertCircle, X, Loader, Zap } from 'lucide-react';
+import { FileText, CheckCircle, AlertCircle, X, Loader, Zap, Info } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { extractTextFromPDF, ExtractedResumeData } from '../lib/pdf-processor';
 
 const ResumeUpload: React.FC = () => {
   const { user } = useAuth();
@@ -12,34 +13,7 @@ const ResumeUpload: React.FC = () => {
   const [success, setSuccess] = useState('');
   const [processingStage, setProcessingStage] = useState('');
   const [extractedData, setExtractedData] = useState<any>(null);
-
-  const extractTextFromPDF = async (file: File): Promise<string> => {
-    try {
-      const text = await file.text();
-      if (text && text.length > 100) {
-        return text.replace(/\s+/g, ' ').trim();
-      }
-      
-      // Fallback method
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      let extractedText = '';
-      
-      for (let i = 0; i < uint8Array.length; i++) {
-        const byte = uint8Array[i];
-        if ((byte >= 32 && byte <= 126) || byte === 10 || byte === 13) {
-          extractedText += String.fromCharCode(byte);
-        } else if (byte === 9) {
-          extractedText += ' ';
-        }
-      }
-      
-      return extractedText.replace(/\s+/g, ' ').trim();
-    } catch (error) {
-      console.error('PDF extraction error:', error);
-      return `Resume file: ${file.name}. Unable to extract text automatically.`;
-    }
-  };
+  const [extractionQuality, setExtractionQuality] = useState<any>(null);
 
   const uploadFile = async (file: File) => {
     if (!user) return;
@@ -49,6 +23,7 @@ const ResumeUpload: React.FC = () => {
     setSuccess('');
     setUploadProgress(0);
     setExtractedData(null);
+    setExtractionQuality(null);
 
     try {
       // Validate file
@@ -59,21 +34,50 @@ const ResumeUpload: React.FC = () => {
         throw new Error('File size must be less than 10MB.');
       }
 
-      setUploadProgress(20);
-      setProcessingStage('Reading PDF content...');
+      setUploadProgress(10);
+      setProcessingStage('Extracting text from PDF...');
 
-      // Extract text
-      const extractedText = await extractTextFromPDF(file);
-      console.log('📝 Extracted text length:', extractedText.length);
+      // Enhanced PDF text extraction
+      console.log('🔍 Starting robust PDF text extraction...');
+      const extractionResult: ExtractedResumeData = await extractTextFromPDF(file);
+      
+      console.log('📊 Extraction completed:', {
+        method: extractionResult.extractionMethod,
+        quality: extractionResult.textQuality,
+        wordCount: extractionResult.extractionMetrics.wordCount,
+        readablePercentage: extractionResult.extractionMetrics.readablePercentage
+      });
 
-      setUploadProgress(40);
+      setExtractionQuality({
+        method: extractionResult.extractionMethod,
+        quality: extractionResult.textQuality,
+        metrics: extractionResult.extractionMetrics
+      });
+
+      setUploadProgress(30);
+      setProcessingStage('Preparing text for AI analysis...');
+
+      // Use the best extracted text
+      const textToAnalyze = extractionResult.cleanedText || extractionResult.rawText;
+      
+      if (!textToAnalyze || textToAnalyze.length < 50) {
+        throw new Error('Could not extract readable text from PDF. Please ensure the PDF contains selectable text.');
+      }
+
+      console.log('📝 Sending to AI for analysis:', {
+        textLength: textToAnalyze.length,
+        firstChars: textToAnalyze.substring(0, 200)
+      });
+
+      setUploadProgress(50);
       setProcessingStage('Analyzing with AI...');
 
-      // Call Supabase function
+      // Call Supabase function with extracted text and metrics
       const { data, error: funcError } = await supabase.functions.invoke('resume-analyzer', {
         body: { 
-          text: extractedText,
-          fileName: file.name
+          text: textToAnalyze,
+          fileName: file.name,
+          extractionMetrics: extractionResult.extractionMetrics
         }
       });
 
@@ -86,7 +90,7 @@ const ResumeUpload: React.FC = () => {
       }
 
       setUploadProgress(80);
-      setProcessingStage('Saving results...');
+      setProcessingStage('Finalizing results...');
 
       const analysisResult = data.data;
       
@@ -103,23 +107,26 @@ const ResumeUpload: React.FC = () => {
         name: analysisResult.personalInfo?.name || '',
         email: analysisResult.personalInfo?.email || '',
         phone: analysisResult.personalInfo?.phone || '',
+        location: analysisResult.personalInfo?.location || '',
         currentRole: analysisResult.currentRole || '',
         experienceLevel: analysisResult.experienceLevel || '',
         professionalSummary: analysisResult.professionalSummary || '',
-        analysisType: data.analysisType || 'ai-powered'
+        skillCategories: analysisResult.skills || { technical: [], business: [], soft: [], industry: [] },
+        keyStrengths: analysisResult.keyStrengths || [],
+        analysisType: data.analysisType || 'enhanced-analysis',
+        textQuality: data.textQuality || 0
       };
 
       setExtractedData(formattedData);
 
       setUploadProgress(100);
       setProcessingStage('Complete!');
-      setSuccess(`Resume analyzed successfully! Found ${allSkills.length} skills.`);
+      setSuccess(`Resume analyzed successfully! Found ${allSkills.length} skills using ${data.analysisType} analysis.`);
 
-      // Don't auto-clear results - let them persist
+      // Clear progress after delay but keep results visible
       setTimeout(() => {
         setUploadProgress(0);
         setProcessingStage('');
-        // Keep extractedData and success message visible
       }, 2000);
 
     } catch (error) {
@@ -137,6 +144,13 @@ const ResumeUpload: React.FC = () => {
     if (files && files.length > 0) {
       uploadFile(files[0]);
     }
+  };
+
+  const resetUpload = () => {
+    setExtractedData(null);
+    setExtractionQuality(null);
+    setSuccess('');
+    setError('');
   };
 
   return (
@@ -157,6 +171,19 @@ const ResumeUpload: React.FC = () => {
                 ></div>
               </div>
               <p className="text-sm text-gray-600 mt-2">{uploadProgress}% complete</p>
+              
+              {/* Show extraction quality during processing */}
+              {extractionQuality && (
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <div className="flex items-center space-x-2 text-sm">
+                    <Info className="h-4 w-4 text-blue-600" />
+                    <span className="text-blue-800">
+                      Extraction: {extractionQuality.method} | Quality: {extractionQuality.quality} | 
+                      Words: {extractionQuality.metrics.wordCount}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -169,7 +196,7 @@ const ResumeUpload: React.FC = () => {
             
             <div>
               <h3 className="text-xl font-semibold text-gray-900 mb-3">AI-Powered Resume Analysis</h3>
-              <p className="text-gray-600 mb-6">Upload your PDF resume for intelligent skill extraction</p>
+              <p className="text-gray-600 mb-6">Advanced PDF extraction with intelligent skill detection</p>
               
               <input 
                 type="file" 
@@ -192,37 +219,42 @@ const ResumeUpload: React.FC = () => {
             <div className="grid grid-cols-2 gap-4 text-sm text-gray-500">
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>PDF files only</span>
+                <span>Multiple extraction methods</span>
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Maximum 10MB</span>
+                <span>Quality validation</span>
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Advanced AI analysis</span>
+                <span>OpenAI integration</span>
               </div>
               <div className="flex items-center space-x-2">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Real content analysis</span>
+                <span>Smart fallback analysis</span>
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Results */}
+      {/* Results Display */}
       {extractedData && !uploading && (
         <div className="mt-6 p-6 bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-xl">
           <div className="flex items-start justify-between">
             <div className="flex-1">
-              <h4 className="font-semibold text-green-900 mb-4 flex items-center">
-                <CheckCircle className="h-5 w-5 mr-2" />
-                Analysis Complete
+              <div className="flex items-center mb-4">
+                <CheckCircle className="h-5 w-5 mr-2 text-green-600" />
+                <h4 className="font-semibold text-green-900">Analysis Complete</h4>
                 <span className="ml-2 bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">
                   {extractedData.analysisType}
                 </span>
-              </h4>
+                {extractedData.textQuality && (
+                  <span className="ml-2 bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+                    Quality: {extractedData.textQuality}%
+                  </span>
+                )}
+              </div>
               
               {/* Professional Summary */}
               {extractedData.professionalSummary && (
@@ -232,43 +264,84 @@ const ResumeUpload: React.FC = () => {
                 </div>
               )}
               
-              {/* Profile Info */}
+              {/* Profile Information */}
               <div className="mb-4">
                 <h5 className="font-medium text-green-800 mb-2">Profile Information:</h5>
                 <div className="text-sm text-green-700 space-y-1">
                   {extractedData.name && <p><span className="font-medium">Name:</span> {extractedData.name}</p>}
                   {extractedData.email && <p><span className="font-medium">Email:</span> {extractedData.email}</p>}
                   {extractedData.phone && <p><span className="font-medium">Phone:</span> {extractedData.phone}</p>}
+                  {extractedData.location && <p><span className="font-medium">Location:</span> {extractedData.location}</p>}
                   {extractedData.currentRole && <p><span className="font-medium">Role:</span> {extractedData.currentRole}</p>}
                   {extractedData.experienceLevel && <p><span className="font-medium">Level:</span> {extractedData.experienceLevel}</p>}
                 </div>
               </div>
               
               {/* Skills by Category */}
-              {extractedData.skills && (
+              {extractedData.skillCategories && (
                 <div className="space-y-4">
                   <h5 className="font-medium text-green-800 mb-3">Skills Analysis ({extractedData.skills.length} total):</h5>
                   
-                  {/* All Skills Display */}
-                  <div className="flex flex-wrap gap-2">
-                    {extractedData.skills.map((skill: string, index: number) => (
-                      <span
-                        key={index}
-                        className="px-3 py-1 bg-green-100 text-green-800 text-sm rounded-full border border-green-200 font-medium"
-                      >
-                        {skill}
-                      </span>
-                    ))}
-                  </div>
+                  {/* Technical Skills */}
+                  {extractedData.skillCategories.technical.length > 0 && (
+                    <div>
+                      <h6 className="text-sm font-medium text-gray-700 mb-2">Technical Skills:</h6>
+                      <div className="flex flex-wrap gap-2">
+                        {extractedData.skillCategories.technical.map((skill: string, index: number) => (
+                          <span key={index} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   
-                  {/* Add "Upload Another" button here */}
+                  {/* Business Skills */}
+                  {extractedData.skillCategories.business.length > 0 && (
+                    <div>
+                      <h6 className="text-sm font-medium text-gray-700 mb-2">Business Skills:</h6>
+                      <div className="flex flex-wrap gap-2">
+                        {extractedData.skillCategories.business.map((skill: string, index: number) => (
+                          <span key={index} className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Soft Skills */}
+                  {extractedData.skillCategories.soft.length > 0 && (
+                    <div>
+                      <h6 className="text-sm font-medium text-gray-700 mb-2">Soft Skills:</h6>
+                      <div className="flex flex-wrap gap-2">
+                        {extractedData.skillCategories.soft.map((skill: string, index: number) => (
+                          <span key={index} className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-full">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Industry Skills */}
+                  {extractedData.skillCategories.industry.length > 0 && (
+                    <div>
+                      <h6 className="text-sm font-medium text-gray-700 mb-2">Industry Skills:</h6>
+                      <div className="flex flex-wrap gap-2">
+                        {extractedData.skillCategories.industry.map((skill: string, index: number) => (
+                          <span key={index} className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded-full">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Upload Another Button */}
                   <div className="mt-4 pt-4 border-t border-green-200">
                     <button
-                      onClick={() => {
-                        setExtractedData(null);
-                        setSuccess('');
-                        setError('');
-                      }}
+                      onClick={resetUpload}
                       className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
                     >
                       Upload Another Resume
@@ -279,7 +352,7 @@ const ResumeUpload: React.FC = () => {
             </div>
             
             <button 
-              onClick={() => setExtractedData(null)} 
+              onClick={resetUpload} 
               className="text-green-400 hover:text-green-600 p-2"
             >
               <X className="h-5 w-5" />
@@ -288,7 +361,7 @@ const ResumeUpload: React.FC = () => {
         </div>
       )}
 
-      {/* Error */}
+      {/* Error Display */}
       {error && (
         <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start space-x-3">
           <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
@@ -302,7 +375,7 @@ const ResumeUpload: React.FC = () => {
         </div>
       )}
 
-      {/* Success */}
+      {/* Success Display */}
       {success && (
         <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start space-x-3">
           <CheckCircle className="h-5 w-5 text-green-500 mt-0.5 flex-shrink-0" />

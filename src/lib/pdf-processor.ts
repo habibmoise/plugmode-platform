@@ -1,29 +1,30 @@
-// src/lib/pdf-processor.ts - Production ready with CSP handling
+// src/lib/pdf-processor.ts - ROBUST PDF TEXT EXTRACTION
 import * as pdfjsLib from 'pdfjs-dist';
-import { supabase } from './supabase';
 
-// Configure PDF.js worker with multiple fallback strategies
-const setupPDFWorker = () => {
-  try {
-    // Try local worker first (best for production)
-    if (typeof window !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.min.js',
-        import.meta.url
-      ).toString();
-    }
-  } catch (error) {
-    console.warn('⚠️ Local PDF worker setup failed, using fallback');
-    // Fallback: disable worker entirely
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-  }
+// Configure PDF.js worker with multiple CDN fallbacks
+const configureWorker = () => {
+  const workerUrls = [
+    `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`,
+    `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`,
+    `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`
+  ];
+  
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrls[0];
 };
 
-// Initialize worker setup
-setupPDFWorker();
+configureWorker();
 
 export interface ExtractedResumeData {
   rawText: string;
+  cleanedText: string;
+  extractionMethod: string;
+  textQuality: 'excellent' | 'good' | 'poor' | 'failed';
+  extractionMetrics: {
+    totalLength: number;
+    readablePercentage: number;
+    lineCount: number;
+    wordCount: number;
+  };
   sections: {
     contact?: string;
     summary?: string;
@@ -31,391 +32,355 @@ export interface ExtractedResumeData {
     education?: string;
     skills?: string;
   };
-  extractedSkills: string[];
-  phoneNumber?: string;
-  email?: string;
-  linkedIn?: string;
-  name?: string;
-  currentRole?: string;
-  experienceLevel?: string;
-  professionalSummary?: string;
-  aiAnalysisSuccess?: boolean;
 }
 
-interface TextExtractionResult {
-  success: boolean;
-  preview: string;
-  quality: number;
-}
-
-export const extractTextFromPDF = async (file: File): Promise<string> => {
-  console.log('📄 Extracting text from PDF (production method):', file.name);
+export class RobustPDFProcessor {
   
-  try {
-    const arrayBuffer = await file.arrayBuffer();
+  /**
+   * Main extraction method - tries multiple strategies
+   */
+  async extractTextFromPDF(file: File): Promise<ExtractedResumeData> {
+    console.log('🔍 Starting robust PDF text extraction for:', file.name);
     
-    // Configure PDF.js for CSP compatibility
-    const loadingTask = pdfjsLib.getDocument({
-      data: arrayBuffer,
-      useWorkerFetch: false,
-      isEvalSupported: false,
-      useSystemFonts: true,
-      // Disable worker if CSP issues persist
-      disableWorker: true
-    });
+    const strategies = [
+      () => this.extractWithPDFJS(file),
+      () => this.extractWithFileReader(file),
+      () => this.extractWithFormData(file),
+      () => this.extractWithArrayBuffer(file)
+    ];
     
-    const pdf = await loadingTask.promise;
-    let fullText = '';
+    let bestResult: ExtractedResumeData | null = null;
+    let bestQualityScore = 0;
     
-    console.log(`📑 Processing ${pdf.numPages} pages...`);
-    
-    // Extract text from all pages with error handling
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    for (let i = 0; i < strategies.length; i++) {
       try {
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
+        console.log(`📄 Trying extraction strategy ${i + 1}...`);
+        const result = await strategies[i]();
+        const qualityScore = this.calculateQualityScore(result);
         
-        // Extract text with basic positioning
-        const textItems = textContent.items as any[];
-        let pageText = '';
+        console.log(`📊 Strategy ${i + 1} quality score:`, qualityScore);
         
-        // Sort by position for better text flow
-        textItems.sort((a, b) => {
-          const yDiff = Math.abs(a.transform[5] - b.transform[5]);
-          if (yDiff < 5) {
-            return a.transform[4] - b.transform[4]; // Same line, sort by x
-          }
-          return b.transform[5] - a.transform[5]; // Different lines, sort by y
-        });
-        
-        let lastY: number | null = null;
-        for (const item of textItems) {
-          const currentY = Math.round(item.transform[5]);
-          
-          // Add line break for new lines
-          if (lastY !== null && Math.abs(currentY - lastY) > 5) {
-            pageText += '\n';
-          }
-          
-          pageText += item.str + ' ';
-          lastY = currentY;
+        if (qualityScore > bestQualityScore) {
+          bestResult = result;
+          bestQualityScore = qualityScore;
         }
         
-        fullText += pageText + '\n\n';
+        // If we get excellent quality, stop trying
+        if (result.textQuality === 'excellent') {
+          console.log('✅ Excellent quality achieved, stopping extraction attempts');
+          break;
+        }
         
-      } catch (pageError) {
-        console.warn(`⚠️ Error processing page ${pageNum}:`, pageError);
-        // Continue with other pages
+      } catch (error) {
+        console.warn(`⚠️ Strategy ${i + 1} failed:`, error.message);
         continue;
       }
     }
     
-    // Clean up the extracted text
-    const cleanText = cleanExtractedText(fullText);
-    
-    console.log('✅ Successfully extracted text, length:', cleanText.length);
-    console.log('📝 First 200 chars:', cleanText.substring(0, 200));
-    
-    if (cleanText.length < 50) {
-      throw new Error('Extracted text too short - PDF might be image-based or corrupted');
+    if (!bestResult) {
+      throw new Error('All PDF extraction strategies failed');
     }
     
-    // Assess text quality
-    const quality = assessTextQuality(cleanText);
-    console.log('📊 Text quality score:', quality);
+    console.log(`🎯 Best extraction method: ${bestResult.extractionMethod}`);
+    console.log(`📊 Final text quality: ${bestResult.textQuality}`);
+    console.log(`📝 Extracted ${bestResult.extractionMetrics.wordCount} words`);
     
-    if (quality < 0.3) {
-      console.warn('⚠️ Low quality text extraction detected');
-    }
+    return bestResult;
+  }
+  
+  /**
+   * Strategy 1: Advanced PDF.js with text positioning
+   */
+  private async extractWithPDFJS(file: File): Promise<ExtractedResumeData> {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({
+      data: arrayBuffer,
+      useSystemFonts: true,
+      verbosity: 0
+    }).promise;
     
-    return cleanText;
+    let fullText = '';
+    const textItems: any[] = [];
     
-  } catch (error) {
-    console.error('❌ PDF extraction failed:', error);
-    
-    // Advanced fallback strategies
-    try {
-      console.log('🔄 Trying alternative extraction methods...');
-      
-      // Fallback 1: Try simple file reading
-      const fileText = await file.text();
-      if (fileText && fileText.length > 100) {
-        console.log('✅ File.text() extraction successful');
-        return cleanExtractedText(fileText);
-      }
-      
-      // Fallback 2: Try reading as data URL
-      const reader = new FileReader();
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent({
+        includeMarkedContent: true,
+        disableCombineTextItems: false
       });
       
-      // Basic text extraction from data URL (limited but sometimes works)
-      const base64 = dataUrl.split(',')[1];
-      const binaryString = atob(base64);
-      const possibleText = binaryString.replace(/[^\x20-\x7E]/g, ' ').trim();
+      // Enhanced text extraction with positioning
+      const pageItems = textContent.items.map((item: any) => ({
+        str: item.str,
+        x: item.transform?.[4] || 0,
+        y: item.transform?.[5] || 0,
+        width: item.width || 0,
+        height: item.height || 0,
+        fontName: item.fontName || '',
+        dir: item.dir || 'ltr'
+      }));
       
-      if (possibleText.length > 100) {
-        console.log('✅ DataURL extraction found some text');
-        return cleanExtractedText(possibleText);
-      }
+      textItems.push(...pageItems);
       
-    } catch (fallbackError) {
-      console.error('❌ All fallback methods failed:', fallbackError);
+      // Sort by Y position (top to bottom), then X position (left to right)
+      pageItems.sort((a, b) => {
+        const yDiff = Math.abs(a.y - b.y);
+        if (yDiff < 5) { // Same line
+          return a.x - b.x;
+        }
+        return b.y - a.y; // PDF coordinates are bottom-up
+      });
+      
+      const pageText = pageItems.map(item => item.str).join(' ');
+      fullText += pageText + '\n';
     }
     
-    // Final fallback: provide instructions for manual input
-    return `Resume document: ${file.name}
-
-❌ Automatic PDF processing failed due to document format or security restrictions.
-
-📋 For best results, please try one of these options:
-
-1. CONVERT TO TEXT-BASED PDF:
-   - Open your resume in Word/Google Docs
-   - Save/Export as PDF (ensure "text-based" not "image")
-   - Upload the new PDF
-
-2. COPY & PASTE METHOD:
-   - Open your resume
-   - Select all content (Ctrl+A)
-   - Copy and paste into a text upload field
-
-3. MANUAL ENTRY:
-   - List your key information: name, email, phone
-   - Work experience with job titles and companies
-   - Skills and technologies you use
-   - Education and certifications
-
-The AI analysis will continue with any available information.`;
+    const cleanedText = this.cleanExtractedText(fullText);
+    const metrics = this.calculateMetrics(cleanedText);
+    
+    return {
+      rawText: fullText,
+      cleanedText,
+      extractionMethod: 'PDF.js with positioning',
+      textQuality: this.assessTextQuality(cleanedText, metrics),
+      extractionMetrics: metrics,
+      sections: this.extractSections(cleanedText)
+    };
   }
-};
-
-// Enhanced text cleaning
-const cleanExtractedText = (rawText: string): string => {
-  return rawText
-    // Normalize whitespace
-    .replace(/\s+/g, ' ')
-    // Remove non-printable characters but keep basic punctuation
-    .replace(/[^\x20-\x7E\n\r]/g, ' ')
-    // Remove excessive line breaks
-    .replace(/\n\s*\n\s*\n/g, '\n\n')
-    // Clean up around punctuation
-    .replace(/\s+([,.;:])/g, '$1')
-    .replace(/([,.;:])\s+/g, '$1 ')
-    // Trim and normalize
-    .trim();
-};
-
-// Text quality assessment
-const assessTextQuality = (text: string): number => {
-  const indicators = {
-    hasEmail: /@[\w.-]+\.\w+/.test(text),
-    hasPhone: /(\+?1?[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})/.test(text),
-    hasResumeWords: /\b(experience|education|skills|work|employment|university|degree)\b/i.test(text),
-    hasReasonableLength: text.length > 200 && text.length < 50000,
-    notMostlySymbols: (text.match(/[a-zA-Z]/g)?.length || 0) > text.length * 0.6,
-    hasStructure: text.includes('\n') && text.split('\n').length > 5
-  };
   
-  return Object.values(indicators).filter(Boolean).length / Object.keys(indicators).length;
-};
-
-export const parseResumeWithAI = async (rawText: string): Promise<ExtractedResumeData> => {
-  console.log('🤖 Analyzing resume with ChatGPT-level AI...');
-  
-  try {
-    // Call Supabase Edge Function
-    const { data, error } = await supabase.functions.invoke('chatgpt-resume-analyzer', {
-      body: { 
-        text: rawText,
-        fileName: 'uploaded-resume.pdf'
-      }
-    });
-
-    if (error) {
-      console.error('❌ Supabase function error:', error);
-      throw new Error(`AI analysis failed: ${error.message}`);
-    }
-
-    if (!data.success) {
-      console.error('❌ AI analysis unsuccessful:', data.error);
-      throw new Error(data.error || 'AI analysis failed');
-    }
-
-    const analysis = data.data;
-    console.log('✅ ChatGPT-level analysis complete:', analysis);
+  /**
+   * Strategy 2: Simple file reader approach
+   */
+  private async extractWithFileReader(file: File): Promise<ExtractedResumeData> {
+    const text = await file.text();
+    const cleanedText = this.cleanExtractedText(text);
+    const metrics = this.calculateMetrics(cleanedText);
     
-    // Combine all skills from different categories
-    const allSkills = [
-      ...(analysis.skills?.technical || []),
-      ...(analysis.skills?.business || []),
-      ...(analysis.skills?.soft || []),
-      ...(analysis.skills?.industry || [])
+    return {
+      rawText: text,
+      cleanedText,
+      extractionMethod: 'File.text() method',
+      textQuality: this.assessTextQuality(cleanedText, metrics),
+      extractionMetrics: metrics,
+      sections: this.extractSections(cleanedText)
+    };
+  }
+  
+  /**
+   * Strategy 3: FormData extraction
+   */
+  private async extractWithFormData(file: File): Promise<ExtractedResumeData> {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    // Convert back to text (simulates server processing)
+    const arrayBuffer = await file.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    
+    let extractedText = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      const byte = uint8Array[i];
+      // Only extract printable ASCII characters
+      if ((byte >= 32 && byte <= 126) || byte === 10 || byte === 13 || byte === 9) {
+        extractedText += String.fromCharCode(byte);
+      } else if (byte >= 160) {
+        // Handle extended ASCII/UTF-8
+        extractedText += String.fromCharCode(byte);
+      }
+    }
+    
+    const cleanedText = this.cleanExtractedText(extractedText);
+    const metrics = this.calculateMetrics(cleanedText);
+    
+    return {
+      rawText: extractedText,
+      cleanedText,
+      extractionMethod: 'Binary extraction with filtering',
+      textQuality: this.assessTextQuality(cleanedText, metrics),
+      extractionMetrics: metrics,
+      sections: this.extractSections(cleanedText)
+    };
+  }
+  
+  /**
+   * Strategy 4: ArrayBuffer with smart filtering
+   */
+  private async extractWithArrayBuffer(file: File): Promise<ExtractedResumeData> {
+    const arrayBuffer = await file.arrayBuffer();
+    const dataView = new DataView(arrayBuffer);
+    let extractedText = '';
+    
+    // Look for text patterns in the binary data
+    for (let i = 0; i < dataView.byteLength - 1; i++) {
+      const byte = dataView.getUint8(i);
+      const nextByte = dataView.getUint8(i + 1);
+      
+      // Detect potential text sequences
+      if (this.isPrintableCharacter(byte)) {
+        // Check if this starts a text sequence
+        let textSequence = '';
+        let j = i;
+        
+        while (j < dataView.byteLength && this.isPrintableCharacter(dataView.getUint8(j))) {
+          textSequence += String.fromCharCode(dataView.getUint8(j));
+          j++;
+        }
+        
+        // Only include sequences that look like real text
+        if (textSequence.length > 2 && this.isLikelyRealText(textSequence)) {
+          extractedText += textSequence + ' ';
+          i = j - 1; // Skip processed bytes
+        }
+      }
+    }
+    
+    const cleanedText = this.cleanExtractedText(extractedText);
+    const metrics = this.calculateMetrics(cleanedText);
+    
+    return {
+      rawText: extractedText,
+      cleanedText,
+      extractionMethod: 'Smart ArrayBuffer parsing',
+      textQuality: this.assessTextQuality(cleanedText, metrics),
+      extractionMetrics: metrics,
+      sections: this.extractSections(cleanedText)
+    };
+  }
+  
+  /**
+   * Clean and normalize extracted text
+   */
+  private cleanExtractedText(text: string): string {
+    return text
+      // Remove PDF artifacts
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+      // Clean up whitespace
+      .replace(/\s+/g, ' ')
+      // Remove common PDF metadata
+      .replace(/\/Type\s*\/\w+/g, '')
+      .replace(/\/Filter\s*\/\w+/g, '')
+      .replace(/stream\s*endstream/g, '')
+      .replace(/obj\s*endobj/g, '')
+      // Remove binary sequences
+      .replace(/[^\x20-\x7E\x09\x0A\x0D]/g, '')
+      // Normalize line breaks
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      // Remove excessive spaces
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n\s*\n/g, '\n')
+      // Remove leading/trailing whitespace
+      .trim();
+  }
+  
+  /**
+   * Calculate text quality metrics
+   */
+  private calculateMetrics(text: string) {
+    const lines = text.split('\n').filter(line => line.trim().length > 0);
+    const words = text.split(/\s+/).filter(word => word.length > 0);
+    
+    // Calculate readability
+    const totalChars = text.length;
+    const readableChars = (text.match(/[a-zA-Z0-9\s.,!?;:()\-@]/g) || []).length;
+    const readablePercentage = totalChars > 0 ? (readableChars / totalChars) * 100 : 0;
+    
+    return {
+      totalLength: totalChars,
+      readablePercentage: Math.round(readablePercentage),
+      lineCount: lines.length,
+      wordCount: words.length
+    };
+  }
+  
+  /**
+   * Assess overall text quality
+   */
+  private assessTextQuality(text: string, metrics: any): 'excellent' | 'good' | 'poor' | 'failed' {
+    if (metrics.totalLength < 50) return 'failed';
+    if (metrics.readablePercentage < 30) return 'poor';
+    if (metrics.readablePercentage < 70) return 'good';
+    
+    // Check for common resume indicators
+    const resumeIndicators = [
+      /\b(experience|education|skills|work|employment|job|position|role)\b/i,
+      /\b(university|college|degree|certification|training)\b/i,
+      /\b(email|phone|address|contact|linkedin)\b/i,
+      /\b(manager|developer|analyst|coordinator|specialist|engineer)\b/i
     ];
     
-    return {
-      rawText,
-      sections: {
-        contact: `${analysis.personalInfo?.name || ''} ${analysis.personalInfo?.email || ''} ${analysis.personalInfo?.phone || ''}`.trim(),
-        summary: analysis.professionalSummary || '',
-        experience: analysis.experience?.map((exp: any) => `${exp.position} at ${exp.company}`).join(', ') || '',
-        education: analysis.education?.map((edu: any) => `${edu.degree} from ${edu.institution}`).join(', ') || '',
-        skills: allSkills.join(', ')
-      },
-      extractedSkills: allSkills,
-      phoneNumber: analysis.personalInfo?.phone || '',
-      email: analysis.personalInfo?.email || '',
-      linkedIn: analysis.personalInfo?.linkedIn || '',
-      name: analysis.personalInfo?.name || '',
-      currentRole: analysis.currentRole || '',
-      experienceLevel: analysis.experienceLevel || '',
-      professionalSummary: analysis.professionalSummary || '',
-      aiAnalysisSuccess: true
-    };
+    const indicatorCount = resumeIndicators.filter(pattern => pattern.test(text)).length;
     
-  } catch (error) {
-    console.error('❌ ChatGPT-level AI analysis failed, using enhanced fallback:', error);
+    if (indicatorCount >= 3 && metrics.wordCount > 100) return 'excellent';
+    if (indicatorCount >= 2 && metrics.wordCount > 50) return 'good';
     
-    // Enhanced fallback analysis
-    const fallbackData = performEnhancedFallbackAnalysis(rawText);
+    return 'poor';
+  }
+  
+  /**
+   * Calculate quality score for comparison
+   */
+  private calculateQualityScore(result: ExtractedResumeData): number {
+    const qualityScores = { excellent: 100, good: 75, poor: 25, failed: 0 };
+    const baseScore = qualityScores[result.textQuality];
     
-    return {
-      ...fallbackData,
-      rawText,
-      aiAnalysisSuccess: false
-    };
-  }
-};
-
-// Enhanced fallback analysis when AI fails
-const performEnhancedFallbackAnalysis = (text: string): Partial<ExtractedResumeData> => {
-  const textLower = text.toLowerCase();
-  
-  // Extract basic information
-  const email = extractEmail(text);
-  const phone = extractPhone(text);
-  const name = extractName(text);
-  const skills = extractEnhancedSkills(text);
-  
-  // Determine experience level
-  let experienceLevel = 'Mid Level';
-  if (textLower.includes('director') || textLower.includes('vp') || textLower.includes('executive')) {
-    experienceLevel = 'Executive';
-  } else if (textLower.includes('senior') || textLower.includes('lead') || textLower.includes('manager')) {
-    experienceLevel = 'Senior Level';
-  } else if (textLower.includes('junior') || textLower.includes('entry') || textLower.includes('intern')) {
-    experienceLevel = 'Entry Level';
-  }
-  
-  // Extract current role
-  const lines = text.split('\n').filter(line => line.trim().length > 0);
-  let currentRole = 'Professional';
-  for (const line of lines.slice(0, 10)) {
-    if (line.length < 100 && (line.includes('Manager') || line.includes('Developer') || line.includes('Analyst') || line.includes('Specialist'))) {
-      currentRole = line.trim();
-      break;
-    }
-  }
-  
-  return {
-    sections: {
-      contact: `${name} ${email} ${phone}`.trim(),
-      skills: skills.join(', ')
-    },
-    extractedSkills: skills,
-    phoneNumber: phone,
-    email: email,
-    name: name,
-    currentRole: currentRole,
-    experienceLevel: experienceLevel,
-    professionalSummary: `Experienced ${currentRole.toLowerCase()} with expertise in ${skills.slice(0, 3).join(', ')}.`
-  };
-};
-
-// Enhanced skill extraction
-const extractEnhancedSkills = (text: string): string[] => {
-  const textLower = text.toLowerCase();
-  const skills = new Set<string>();
-  
-  const skillCategories = {
-    sales: {
-      keywords: ['sales', 'salesforce', 'crm', 'business development', 'account management', 'pipeline', 'revenue', 'quota'],
-      skills: ['Sales Management', 'CRM Systems', 'Business Development', 'Account Management', 'Pipeline Management', 'Revenue Growth']
-    },
-    tech: {
-      keywords: ['javascript', 'python', 'react', 'node.js', 'aws', 'sql', 'api', 'software', 'programming'],
-      skills: ['Software Development', 'Programming', 'Database Management', 'Cloud Computing', 'API Development', 'Web Development']
-    },
-    marketing: {
-      keywords: ['marketing', 'seo', 'social media', 'content', 'digital marketing', 'campaigns', 'analytics'],
-      skills: ['Digital Marketing', 'SEO', 'Social Media Marketing', 'Content Marketing', 'Campaign Management', 'Marketing Analytics']
-    },
-    management: {
-      keywords: ['team', 'leadership', 'management', 'project', 'strategic', 'planning', 'coordination'],
-      skills: ['Team Leadership', 'Project Management', 'Strategic Planning', 'Cross-functional Coordination', 'Performance Management']
-    }
-  };
-  
-  // Check each category and add relevant skills
-  Object.values(skillCategories).forEach(category => {
-    const hasKeywords = category.keywords.some(keyword => textLower.includes(keyword));
-    if (hasKeywords) {
-      category.skills.forEach(skill => skills.add(skill));
-    }
-  });
-  
-  // Add universal soft skills
-  skills.add('Communication');
-  skills.add('Problem Solving');
-  skills.add('Team Collaboration');
-  
-  return Array.from(skills).slice(0, 12);
-};
-
-// Helper functions
-const extractName = (text: string): string => {
-  const lines = text.split('\n').filter(line => line.trim().length > 0);
-  
-  for (const line of lines.slice(0, 5)) {
-    const cleanLine = line.trim();
-    if (cleanLine.length > 3 && cleanLine.length < 50 && 
-        !cleanLine.includes('@') && !cleanLine.includes('http') &&
-        !/^\d/.test(cleanLine) && !cleanLine.toLowerCase().includes('resume')) {
-      return cleanLine;
-    }
-  }
-  
-  return 'Professional';
-};
-
-const extractEmail = (text: string): string => {
-  const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/);
-  return emailMatch?.[0] || '';
-};
-
-const extractPhone = (text: string): string => {
-  const phoneMatch = text.match(/(\+?\d{1,4}[\s\-\.]?)?\(?(\d{3})\)?[\s\-\.]?(\d{3,4})[\s\-\.]?(\d{4})/);
-  return phoneMatch?.[0] || '';
-};
-
-export const testPDFExtraction = async (file: File): Promise<TextExtractionResult> => {
-  try {
-    const text = await extractTextFromPDF(file);
-    const quality = assessTextQuality(text);
+    // Bonus points for word count and readability
+    const wordBonus = Math.min(result.extractionMetrics.wordCount / 10, 50);
+    const readabilityBonus = result.extractionMetrics.readablePercentage / 4;
     
-    return {
-      success: true,
-      preview: text.substring(0, 500) + (text.length > 500 ? '...' : ''),
-      quality
-    };
-  } catch (error) {
-    return {
-      success: false,
-      preview: error instanceof Error ? error.message : 'Extraction failed',
-      quality: 0
-    };
+    return baseScore + wordBonus + readabilityBonus;
   }
-};
+  
+  /**
+   * Extract document sections
+   */
+  private extractSections(text: string) {
+    const sections: any = {};
+    
+    // Contact information (usually at top)
+    const contactMatch = text.substring(0, 500).match(/(.*(?:@|phone|tel|email|linkedin).*)/i);
+    if (contactMatch) sections.contact = contactMatch[0];
+    
+    // Professional summary/objective
+    const summaryMatch = text.match(/(summary|objective|profile)[\s\S]{1,500}/i);
+    if (summaryMatch) sections.summary = summaryMatch[0];
+    
+    // Experience section
+    const experienceMatch = text.match(/(experience|employment|work history)[\s\S]{1,1000}/i);
+    if (experienceMatch) sections.experience = experienceMatch[0];
+    
+    // Education section
+    const educationMatch = text.match(/(education|academic|degree|university|college)[\s\S]{1,500}/i);
+    if (educationMatch) sections.education = educationMatch[0];
+    
+    // Skills section
+    const skillsMatch = text.match(/(skills|competencies|technical|proficiencies)[\s\S]{1,500}/i);
+    if (skillsMatch) sections.skills = skillsMatch[0];
+    
+    return sections;
+  }
+  
+  /**
+   * Helper methods
+   */
+  private isPrintableCharacter(byte: number): boolean {
+    return (byte >= 32 && byte <= 126) || byte === 9 || byte === 10 || byte === 13;
+  }
+  
+  private isLikelyRealText(text: string): boolean {
+    // Check if text contains common English patterns
+    const vowels = text.match(/[aeiouAEIOU]/g);
+    const consonants = text.match(/[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]/g);
+    
+    if (!vowels || !consonants) return false;
+    
+    const vowelRatio = vowels.length / text.length;
+    return vowelRatio > 0.1 && vowelRatio < 0.7 && text.length > 3;
+  }
+}
+
+// Export convenience function
+export async function extractTextFromPDF(file: File): Promise<ExtractedResumeData> {
+  const processor = new RobustPDFProcessor();
+  return processor.extractTextFromPDF(file);
+}

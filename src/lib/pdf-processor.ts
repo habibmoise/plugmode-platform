@@ -1,9 +1,11 @@
 // src/lib/pdf-processor.ts - LEAD-LEVEL ENTERPRISE GRADE
 import * as pdfjsLib from 'pdfjs-dist';
 
-// 🔥 CRITICAL: Explicitly disable workers to prevent CSP issues
-// Even with disableWorker: true, PDF.js still references GlobalWorkerOptions.workerSrc
+// 🔥 BULLETPROOF WORKER DISABLE - Must happen at module level BEFORE any getDocument calls
+// This prevents "No GlobalWorkerOptions.workerSrc specified" error
 pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+
+console.log('✅ PDF.js worker disabled globally - workerSrc:', pdfjsLib.GlobalWorkerOptions.workerSrc);
 
 export interface ExtractedResumeData {
   rawText: string;
@@ -329,41 +331,48 @@ async function extractWithSmartMultilingualArrayBuffer(file: File): Promise<stri
   
   const arrayBuffer = await file.arrayBuffer();
   
-  // 🔥 ENTERPRISE UTF-8 DECODING FIRST (handles most international text)
-  try {
-    const decoder = new TextDecoder('utf-8', { fatal: false });
-    const decodedText = decoder.decode(arrayBuffer);
-    
-    if (decodedText && decodedText.length > 100) {
-      const processedText = processDecodedText(decodedText);
-      if (processedText.length > 100) {
-        console.log('✅ Enterprise UTF-8 decoding successful');
-        return processedText;
-      }
-    }
-  } catch (decodingError) {
-    console.warn('⚠️ UTF-8 decoding failed, trying enterprise byte-by-byte...');
-  }
-  
-  // 🔥 ENTERPRISE FALLBACK: ENHANCED BYTE-BY-BYTE WITH EXTENDED ASCII
+  // 🔥 FIRST: Try to avoid PDF binary content entirely
   const uint8Array = new Uint8Array(arrayBuffer);
+  
+  // Skip PDF header and look for text content
   let textSegments: string[] = [];
   let currentSegment = '';
+  let skipBinaryMode = false;
   
   for (let i = 0; i < uint8Array.length; i++) {
     const byte = uint8Array[i];
     
-    // Include ASCII + Latin-1 Supplement + common Unicode ranges
+    // Detect PDF binary sections and skip them
+    if (i < uint8Array.length - 10) {
+      const next10 = Array.from(uint8Array.slice(i, i + 10)).map(b => String.fromCharCode(b)).join('');
+      if (next10.includes('obj') || next10.includes('stream') || next10.includes('endobj')) {
+        skipBinaryMode = true;
+        continue;
+      }
+      if (next10.includes('endstream') || (skipBinaryMode && byte >= 32 && byte <= 126)) {
+        skipBinaryMode = false;
+      }
+    }
+    
+    if (skipBinaryMode) continue;
+    
+    // Include readable characters (ASCII + extended)
     if ((byte >= 32 && byte <= 126) ||     // Standard ASCII
-        (byte >= 160 && byte <= 255) ||    // Latin-1 Supplement (àáâãäåæçèéêë...)
+        (byte >= 160 && byte <= 255) ||    // Latin-1 Supplement
         byte === 10 || byte === 13 || byte === 9) {  // Newlines and tabs
-      currentSegment += String.fromCharCode(byte);
+      
+      const char = String.fromCharCode(byte);
+      
+      // Skip obvious PDF syntax
+      if (!/[%<>\/\\]/.test(char)) {
+        currentSegment += char;
+      }
     } else {
       // Hit non-readable byte - process current segment
       if (currentSegment.length > PDF_CONFIG.MIN_SEGMENT_LENGTH) {
         const words = currentSegment
           .split(/\s+/)
-          .filter(word => isLikelyWord(word));
+          .filter(word => isLikelyResumeWord(word));
         
         if (words.length > PDF_CONFIG.MIN_WORDS_PER_SEGMENT) {
           textSegments.push(words.join(' '));
@@ -377,7 +386,7 @@ async function extractWithSmartMultilingualArrayBuffer(file: File): Promise<stri
   if (currentSegment.length > PDF_CONFIG.MIN_SEGMENT_LENGTH) {
     const words = currentSegment
       .split(/\s+/)
-      .filter(word => isLikelyWord(word));
+      .filter(word => isLikelyResumeWord(word));
     
     if (words.length > PDF_CONFIG.MIN_WORDS_PER_SEGMENT) {
       textSegments.push(words.join(' '));
@@ -386,12 +395,24 @@ async function extractWithSmartMultilingualArrayBuffer(file: File): Promise<stri
   
   const extractedText = textSegments.join(' ');
   
-  if (extractedText.length > 100) {
-    console.log('✅ Enterprise multilingual ArrayBuffer extraction found structured text');
-    return extractedText;
+  // Clean up any remaining PDF artifacts
+  const cleanedText = extractedText
+    .replace(/\b\d+\s+0\s+obj\b/g, ' ')
+    .replace(/\bstream\b/g, ' ')
+    .replace(/\bendobj\b/g, ' ')
+    .replace(/\bR\b/g, ' ')
+    .replace(/\bFilter\b/g, ' ')
+    .replace(/\bFlateDecode\b/g, ' ')
+    .replace(/\bLength\d*\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  if (cleanedText.length > 100 && !cleanedText.startsWith('%PDF')) {
+    console.log('✅ Enterprise multilingual ArrayBuffer extraction found clean text');
+    return cleanedText;
   }
   
-  throw new Error('Enterprise ArrayBuffer extraction found insufficient structured text');
+  throw new Error('Enterprise ArrayBuffer extraction found insufficient clean text');
 }
 
 function processDecodedText(text: string): string {
@@ -412,17 +433,21 @@ function processDecodedText(text: string): string {
     .trim();
 }
 
-function isLikelyWord(word: string): boolean {
+function isLikelyResumeWord(word: string): boolean {
   if (!word || word.length < 2 || word.length > 30) return false;
   
   // Must contain at least one letter (including international characters)
   if (!/[\p{L}]/u.test(word)) return false;
   
-  // Reject words that are mostly symbols/numbers
+  // Reject PDF-specific terms
+  const pdfTerms = /^(obj|endobj|stream|endstream|filter|flatedecode|length|xref|trailer|startxref)$/i;
+  if (pdfTerms.test(word)) return false;
+  
+  // Reject words that are mostly numbers or symbols
   const letterCount = (word.match(/[\p{L}]/gu) || []).length;
   const letterRatio = letterCount / word.length;
   
-  return letterRatio >= 0.3;
+  return letterRatio >= 0.4; // Higher threshold for cleaner extraction
 }
 
 function calculateAdvancedTextMetrics(text: string, processingTime: number, pagesProcessed: number, pagesSkipped: number) {

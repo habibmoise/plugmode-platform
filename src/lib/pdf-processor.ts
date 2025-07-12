@@ -242,7 +242,7 @@ export const extractTextFromPDF = async (file: File): Promise<ExtractedResumeDat
   }
 };
 
-// 🔍 ENHANCED ARRAYBUFFER EXTRACTION with intelligent text detection
+// 🔍 RESTORED WORKING ARRAYBUFFER EXTRACTION - Less strict filtering
 async function extractWithEnhancedArrayBuffer(file: File): Promise<string> {
   console.log('🧠 Starting enhanced ArrayBuffer extraction...');
   
@@ -252,78 +252,77 @@ async function extractWithEnhancedArrayBuffer(file: File): Promise<string> {
   console.log('📊 ArrayBuffer analysis:', {
     totalBytes: uint8Array.length,
     firstBytes: Array.from(uint8Array.slice(0, 10)).map(b => String.fromCharCode(b)).join(''),
-    // ✅ FIXED: Proper PDF format check
     isPdfFormat: Array.from(uint8Array.slice(0, 4)).every((b, i) => b === '%PDF'.charCodeAt(i))
   });
   
-  let meaningfulTextChunks: string[] = [];
-  let currentText = '';
-  let consecutiveReadableCount = 0;
-  const minConsecutiveReadable = 10; // Need at least 10 consecutive readable chars
+  let textChunks: string[] = [];
+  let currentChunk = '';
+  let readableCharCount = 0;
+  let totalCharCount = 0;
   
-  // 🔥 SMARTER TEXT EXTRACTION - Look for patterns of readable text
+  // More permissive text extraction - restore working approach
   for (let i = 0; i < uint8Array.length; i++) {
     const byte = uint8Array[i];
+    totalCharCount++;
     
-    // Check if this is a readable character
-    if ((byte >= 32 && byte <= 126) || byte === 10 || byte === 13 || byte === 9) {
-      const char = String.fromCharCode(byte);
+    // Accept wider range of characters
+    if ((byte >= 32 && byte <= 126) ||     // Printable ASCII
+        (byte >= 128 && byte <= 255) ||    // Extended ASCII
+        byte === 10 || byte === 13 || byte === 9) {  // Whitespace
       
-      // Only include letters, numbers, and common punctuation
-      if (/[a-zA-Z0-9\s.,!?@():-]/.test(char)) {
-        currentText += char;
-        consecutiveReadableCount++;
-      } else {
-        // Reset if we hit symbols that suggest PDF structure
-        if (consecutiveReadableCount >= minConsecutiveReadable) {
-          const cleanText = currentText.trim();
-          if (cleanText.length > 20 && isLikelyResumeText(cleanText)) {
-            meaningfulTextChunks.push(cleanText);
-            console.log('📝 Found meaningful text:', cleanText.substring(0, 50) + '...');
-          }
-        }
-        currentText = '';
-        consecutiveReadableCount = 0;
+      const char = String.fromCharCode(byte);
+      readableCharCount++;
+      
+      // Less aggressive filtering - keep more content
+      if (!/^[%<>{}[\]()]$/.test(char)) {
+        currentChunk += char;
       }
-    } else {
-      // Non-readable byte - process accumulated text if meaningful
-      if (consecutiveReadableCount >= minConsecutiveReadable) {
-        const cleanText = currentText.trim();
-        if (cleanText.length > 20 && isLikelyResumeText(cleanText)) {
-          meaningfulTextChunks.push(cleanText);
-          console.log('📝 Found meaningful text:', cleanText.substring(0, 50) + '...');
-        }
+      
+    } else if (currentChunk.length > 5) {
+      // Process accumulated chunk with more permissive rules
+      const words = currentChunk.split(/\s+/)
+        .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
+        .filter(word => !isPdfArtifact(word));
+      
+      if (words.length > 1) {
+        const chunkText = words.join(' ');
+        textChunks.push(chunkText);
+        console.log('📝 Found text chunk:', chunkText.substring(0, 80) + (chunkText.length > 80 ? '...' : ''));
       }
-      currentText = '';
-      consecutiveReadableCount = 0;
+      
+      currentChunk = '';
     }
   }
   
-  // Process final accumulated text
-  if (consecutiveReadableCount >= minConsecutiveReadable) {
-    const cleanText = currentText.trim();
-    if (cleanText.length > 20 && isLikelyResumeText(cleanText)) {
-      meaningfulTextChunks.push(cleanText);
-      console.log('📝 Found final meaningful text:', cleanText.substring(0, 50) + '...');
+  // Process final chunk
+  if (currentChunk.length > 5) {
+    const words = currentChunk.split(/\s+/)
+      .filter(word => word.length > 1 && /[a-zA-Z]/.test(word))
+      .filter(word => !isPdfArtifact(word));
+    
+    if (words.length > 1) {
+      const chunkText = words.join(' ');
+      textChunks.push(chunkText);
+      console.log('📝 Found final chunk:', chunkText.substring(0, 80) + (chunkText.length > 80 ? '...' : ''));
     }
   }
   
-  // Combine all meaningful chunks
-  const extractedText = meaningfulTextChunks.join(' ');
+  const extractedText = textChunks.join(' ');
   
   console.log('📊 ArrayBuffer extraction results:', {
-    totalChunks: meaningfulTextChunks.length,
+    totalChunks: textChunks.length,
     extractedLength: extractedText.length,
-    preview: extractedText.substring(0, 200),
-    containsResumeKeywords: /\b(experience|education|skills|work|job|manager|professional)\b/i.test(extractedText)
+    readableRatio: Math.round((readableCharCount / totalCharCount) * 100) + '%',
+    preview: extractedText.substring(0, 300),
+    hasResumeContent: extractedText.length > 100
   });
   
-  if (extractedText.length > 100 && meaningfulTextChunks.length > 2) {
-    console.log('✅ Enhanced ArrayBuffer extraction found meaningful resume text');
+  if (extractedText.length > 50 && textChunks.length > 1) {
+    console.log('✅ Enhanced ArrayBuffer extraction found text content');
     return extractedText;
   }
   
-  throw new Error(`ArrayBuffer extraction insufficient: ${extractedText.length} chars, ${meaningfulTextChunks.length} meaningful chunks`);
+  throw new Error(`ArrayBuffer extraction insufficient: ${extractedText.length} chars, ${textChunks.length} chunks`);
 }
 
 function isLikelyResumeText(text: string): boolean {

@@ -1,469 +1,330 @@
-// src/components/ResumeUpload.tsx - EXACT WORKING VERSION FROM CONVERSATION 17
+// src/components/ResumeUpload.tsx - Fully automated solution
 import React, { useState } from 'react';
-import { FileText, CheckCircle, AlertCircle, X, Loader, Zap, Info } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
-import { extractTextFromPDF, ExtractedResumeData } from '../lib/pdf-processor';
+import { useRouter } from 'next/router';
+import { createClient } from '@supabase/supabase-js';
+import { processResumeAutomatically } from '../lib/pdf-processor';
+import type { ExtractedResumeData } from '../lib/pdf-processor';
 
-const ResumeUpload: React.FC = () => {
-  const { user } = useAuth();
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [processingStage, setProcessingStage] = useState('');
-  const [extractedData, setExtractedData] = useState<any>(null);
-  const [extractionQuality, setExtractionQuality] = useState<any>(null);
-  const [resultsLocked, setResultsLocked] = useState(false);
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
-  const uploadFile = async (file: File) => {
-    if (!user) return;
+interface ResumeUploadProps {
+  onUploadComplete?: (data: ExtractedResumeData) => void;
+}
 
-    setUploading(true);
+export default function ResumeUpload({ onUploadComplete }: ResumeUploadProps) {
+  const [file, setFile] = useState<File | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState<string>('');
+  const [extractedData, setExtractedData] = useState<ExtractedResumeData | null>(null);
+  const [error, setError] = useState<string>('');
+  const router = useRouter();
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
+    if (selectedFile) {
+      if (selectedFile.type !== 'application/pdf') {
+        setError('Please select a PDF file');
+        return;
+      }
+      if (selectedFile.size > 10 * 1024 * 1024) { // 10MB limit
+        setError('File size must be less than 10MB');
+        return;
+      }
+      setFile(selectedFile);
+      setError('');
+      setExtractedData(null);
+    }
+  };
+
+  const updateProgress = (step: number, message: string) => {
+    setProgress(step);
+    setStatus(message);
+  };
+
+  const processResume = async () => {
+    if (!file) return;
+
+    setIsProcessing(true);
     setError('');
-    setSuccess('');
-    setUploadProgress(0);
-    setExtractionQuality(null);
-
+    
     try {
-      // Validate file
-      if (file.type !== 'application/pdf') {
-        throw new Error('Please upload a PDF file only.');
-      }
-      if (file.size > 10 * 1024 * 1024) {
-        throw new Error('File size must be less than 10MB.');
-      }
-
-      setUploadProgress(10);
-      setProcessingStage('Extracting text from PDF...');
-
-      // Enhanced PDF text extraction
-      console.log('🔍 Starting robust PDF text extraction...');
-      const extractionResult: ExtractedResumeData = await extractTextFromPDF(file);
+      // Step 1: Upload file to Supabase Storage
+      updateProgress(20, 'Uploading file securely...');
       
-      console.log('📊 Extraction completed:', {
-        method: extractionResult.extractionMethod,
-        quality: extractionResult.textQuality,
-        wordCount: extractionResult.extractionMetrics.wordCount,
-        readablePercentage: extractionResult.extractionMetrics.readablePercentage
-      });
-
-      setExtractionQuality({
-        method: extractionResult.extractionMethod,
-        quality: extractionResult.textQuality,
-        metrics: extractionResult.extractionMetrics
-      });
-
-      setUploadProgress(30);
-      setProcessingStage('Preparing text for AI analysis...');
-
-      // Use the best extracted text
-      const textToAnalyze = extractionResult.cleanedText || extractionResult.rawText;
+      const fileExt = 'pdf';
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
       
-      if (!textToAnalyze || textToAnalyze.length < 50) {
-        throw new Error('Could not extract readable text from PDF. Please ensure the PDF contains selectable text.');
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('resumes')
+        .upload(fileName, file);
+
+      if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
       }
 
-      console.log('📝 Sending to AI for analysis:', {
-        textLength: textToAnalyze.length,
-        firstChars: textToAnalyze.substring(0, 200)
-      });
+      // Step 2: Process PDF automatically
+      updateProgress(40, 'Extracting text from PDF...');
+      
+      const extractedData = await processResumeAutomatically(file);
+      
+      if (extractedData.confidence < 30) {
+        console.warn('⚠️ Low confidence extraction, but continuing...');
+      }
 
-      setUploadProgress(50);
-      setProcessingStage('Analyzing with AI...');
+      // Step 3: Save to database
+      updateProgress(70, 'Saving extracted data...');
+      
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        throw new Error('User not authenticated');
+      }
 
-      // Call API route (which proxies to Supabase function)
-      const response = await fetch('/api/resume/analyze-complete', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user.id}`
+      const resumeData = {
+        user_id: user.id,
+        file_path: uploadData.path,
+        original_filename: file.name,
+        extracted_text: extractedData.rawText,
+        skills: extractedData.extractedSkills,
+        contact_info: {
+          email: extractedData.email,
+          phone: extractedData.phoneNumber,
+          name: extractedData.name,
+          location: extractedData.location,
+          linkedin: extractedData.linkedIn
         },
-        body: JSON.stringify({
-          text: textToAnalyze,
-          fileName: file.name,
-          userId: user.id,
-          extractionMetrics: extractionResult.extractionMetrics
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Analysis failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (!data.success) {
-        throw new Error(data.error || 'Analysis failed');
-      }
-
-      setUploadProgress(80);
-      setProcessingStage('Finalizing results...');
-
-      const analysisResult = data.data;
-      
-      // ✅ SAFE SKILL EXTRACTION WITH NULL CHECKS
-      const safeSkills = analysisResult.skills || {};
-      const allSkills = [
-        ...(safeSkills.technical || []),
-        ...(safeSkills.business || []),
-        ...(safeSkills.soft || []),
-        ...(safeSkills.industry || [])
-      ];
-
-      // ✅ SAFE PERSONAL INFO EXTRACTION  
-      const safePersonalInfo = analysisResult.personalInfo || {};
-
-      const formattedData = {
-        skills: allSkills,
-        name: safePersonalInfo.name || '',
-        email: safePersonalInfo.email || '',
-        phone: safePersonalInfo.phone || '',
-        location: safePersonalInfo.location || '',
-        currentRole: analysisResult.currentRole || '',
-        experienceLevel: analysisResult.experienceLevel || '',
-        professionalSummary: analysisResult.professionalSummary || '',
-        skillCategories: safeSkills || { technical: [], business: [], soft: [], industry: [] },
-        keyStrengths: analysisResult.keyStrengths || [],
-        analysisType: data.analysisType || 'enhanced-analysis',
-        textQuality: data.textQuality || 0,
-        fileName: file.name,
-        uploadDate: new Date().toLocaleString()
+        processing_status: 'completed',
+        quality_score: extractedData.confidence,
+        created_at: new Date().toISOString()
       };
 
-      // SET RESULTS AND LOCK THEM TO PREVENT CLEARING
-      setExtractedData(formattedData);
-      setResultsLocked(true);
-      console.log('🔒 Results locked and set:', formattedData);
+      const { data: dbData, error: dbError } = await supabase
+        .from('resumes')
+        .insert(resumeData)
+        .select()
+        .single();
 
-      setUploadProgress(100);
-      setProcessingStage('Complete!');
-      setSuccess(`Resume analyzed successfully! Found ${allSkills.length} skills using ${data.analysisType} analysis.`);
+      if (dbError) {
+        console.error('Database error:', dbError);
+        // Don't throw error, just log it - the extraction still worked
+      }
 
-      // Clear upload state immediately but keep results
-      setUploadProgress(0);
-      setProcessingStage('');
-      setUploading(false);
+      // Step 4: Complete
+      updateProgress(100, 'Processing complete!');
+      
+      setExtractedData(extractedData);
+      
+      if (onUploadComplete) {
+        onUploadComplete(extractedData);
+      }
+
+      // Auto-redirect after success
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 2000);
 
     } catch (error) {
-      console.error('Upload error:', error);
-      setError(error instanceof Error ? error.message : 'Upload failed. Please try again.');
-      setUploadProgress(0);
-      setProcessingStage('');
-      setUploading(false);
+      console.error('❌ Processing error:', error);
+      setError(error instanceof Error ? error.message : 'An unexpected error occurred');
+      setProgress(0);
+      setStatus('');
     } finally {
-      // Ensure uploading is always set to false
-      setUploading(false);
+      setIsProcessing(false);
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      uploadFile(files[0]);
+  const getQualityColor = (quality: string) => {
+    switch (quality) {
+      case 'excellent': return 'text-green-600';
+      case 'good': return 'text-blue-600';
+      case 'fair': return 'text-yellow-600';
+      case 'poor': return 'text-red-600';
+      default: return 'text-gray-600';
     }
   };
 
-  const resetUpload = () => {
-    console.log('🔄 Manually resetting results');
-    setExtractedData(null);
-    setResultsLocked(false);
-    setExtractionQuality(null);
-    setSuccess('');
-    setError('');
-    setUploadProgress(0);
-    setProcessingStage('');
-    setUploading(false);
-  };
-
-  const clearMessages = () => {
-    setSuccess('');
-    setError('');
+  const getQualityIcon = (quality: string) => {
+    switch (quality) {
+      case 'excellent': return '🟢';
+      case 'good': return '🔵';
+      case 'fair': return '🟡';
+      case 'poor': return '🔴';
+      default: return '⚪';
+    }
   };
 
   return (
-    <div className="w-full">
-      {/* Upload Area */}
-      <div className="border-2 border-dashed rounded-2xl p-8 text-center transition-all duration-300 border-gray-300 hover:border-blue-400 hover:bg-blue-50">
-        {uploading ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-center">
-              <Loader className="h-8 w-8 text-blue-600 animate-spin" />
-            </div>
-            <div>
-              <p className="text-lg font-medium text-gray-900">{processingStage}</p>
-              <div className="w-full bg-gray-200 rounded-full h-3 mt-3">
-                <div 
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 h-3 rounded-full transition-all duration-500" 
-                  style={{ width: `${uploadProgress}%` }}
-                ></div>
-              </div>
-              <p className="text-sm text-gray-600 mt-2">{uploadProgress}% complete</p>
-              
-              {/* Show extraction quality during processing */}
-              {extractionQuality && (
-                <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
-                  <div className="flex items-center space-x-2 text-sm">
-                    <Info className="h-4 w-4 text-blue-600" />
-                    <span className="text-blue-800">
-                      Extraction: {extractionQuality.method} | Quality: {extractionQuality.quality} | 
-                      Words: {extractionQuality.metrics?.wordCount || 0}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div className="flex items-center justify-center">
-              <div className="bg-gradient-to-r from-blue-500 to-purple-600 p-4 rounded-full">
-                <Zap className="h-8 w-8 text-white" />
-              </div>
-            </div>
-            
-            <div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-3">AI-Powered Resume Analysis</h3>
-              <p className="text-gray-600 mb-4">Upload your PDF resume for intelligent skill extraction and analysis</p>
-              
-              {/* FILE FORMAT INSTRUCTIONS - COMPREHENSIVE FROM CONVERSATION 17 */}
-              <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <h4 className="text-sm font-medium text-gray-900 mb-2">File Requirements:</h4>
-                <ul className="text-sm text-gray-600 space-y-1">
-                  <li>• <strong>Format:</strong> PDF files only (max 10MB)</li>
-                  <li>• <strong>Content:</strong> Text-based PDFs work best</li>
-                  <li>• <strong>Quality:</strong> Ensure text is selectable (not scanned images)</li>
-                  <li>• <strong>Language:</strong> English resumes for optimal results</li>
-                </ul>
-              </div>
-              
-              <input 
-                type="file" 
-                accept=".pdf" 
-                onChange={handleFileSelect} 
-                className="hidden" 
-                id="resume-upload" 
-                disabled={uploading} 
-              />
-              
-              <label 
-                htmlFor="resume-upload" 
-                className="inline-flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all cursor-pointer font-medium transform hover:scale-105"
-              >
-                <FileText className="h-5 w-5" />
-                <span>{extractedData ? 'Upload Another Resume' : 'Choose PDF Resume'}</span>
-              </label>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-4 text-sm text-gray-500">
-              <div className="flex items-center space-x-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>OpenAI Analysis</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Skill Categorization</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Quality Validation</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span>Secure Processing</span>
-              </div>
-            </div>
-          </div>
-        )}
+    <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+      <div className="text-center mb-8">
+        <h2 className="text-3xl font-bold text-gray-800 mb-2">
+          Automated Resume Processor
+        </h2>
+        <p className="text-gray-600">
+          Upload your PDF resume for instant skill extraction and analysis
+        </p>
       </div>
 
-      {/* PERSISTENT RESULTS DISPLAY - ONLY SHOW IF RESULTS ARE LOCKED */}
-      {extractedData && resultsLocked && (
-        <div className="mt-6 p-6 bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-xl">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <div className="flex items-center mb-4">
-                <CheckCircle className="h-5 w-5 mr-2 text-green-600" />
-                <h4 className="font-semibold text-green-900">Analysis Complete</h4>
-                <span className="ml-2 bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">
-                  {extractedData.analysisType}
-                </span>
-                {extractedData.textQuality && (
-                  <span className="ml-2 bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
-                    Quality: {extractedData.textQuality}%
-                  </span>
-                )}
-              </div>
-
-              {/* File Info */}
-              <div className="mb-4 text-xs text-gray-500">
-                <span>File: {extractedData.fileName} | Analyzed: {extractedData.uploadDate}</span>
-              </div>
-              
-              {/* Professional Summary */}
-              {extractedData.professionalSummary && extractedData.professionalSummary !== 'Brief 2-3 sentence summary' && (
-                <div className="mb-4 p-3 bg-white rounded-lg border">
-                  <h5 className="font-medium text-gray-900 mb-1">Professional Summary</h5>
-                  <p className="text-sm text-gray-700">{extractedData.professionalSummary}</p>
-                </div>
-              )}
-              
-              {/* Profile Information */}
-              <div className="mb-4">
-                <h5 className="font-medium text-green-800 mb-2">Profile Information:</h5>
-                <div className="text-sm text-green-700 space-y-1">
-                  <p><span className="font-medium">Name:</span> {extractedData.name || 'Not extracted'}</p>
-                  <p><span className="font-medium">Email:</span> {extractedData.email || 'Not found'}</p>
-                  <p><span className="font-medium">Phone:</span> {extractedData.phone || 'Not found'}</p>
-                  <p><span className="font-medium">Location:</span> {extractedData.location || 'Not found'}</p>
-                  <p><span className="font-medium">Role:</span> {extractedData.currentRole || 'Professional'}</p>
-                  <p><span className="font-medium">Level:</span> {extractedData.experienceLevel || 'Not determined'}</p>
-                </div>
-              </div>
-              
-              {/* Skills Display */}
-              <div className="space-y-4">
-                <h5 className="font-medium text-green-800 mb-3">
-                  Skills Analysis ({extractedData.skills?.length || 0} total):
-                </h5>
-                
-                {extractedData.skills && extractedData.skills.length > 0 ? (
-                  <>
-                    {/* Technical Skills - Safe Rendering */}
-                    {extractedData.skillCategories?.technical && extractedData.skillCategories.technical.length > 0 && (
-                      <div>
-                        <h6 className="text-sm font-medium text-gray-700 mb-2">
-                          Technical Skills ({extractedData.skillCategories.technical.length}):
-                        </h6>
-                        <div className="flex flex-wrap gap-2">
-                          {extractedData.skillCategories.technical.map((skill: string, index: number) => (
-                            <span key={index} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full border border-blue-200">
-                              {skill}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Business Skills - Safe Rendering */}
-                    {extractedData.skillCategories?.business && extractedData.skillCategories.business.length > 0 && (
-                      <div>
-                        <h6 className="text-sm font-medium text-gray-700 mb-2">
-                          Business Skills ({extractedData.skillCategories.business.length}):
-                        </h6>
-                        <div className="flex flex-wrap gap-2">
-                          {extractedData.skillCategories.business.map((skill: string, index: number) => (
-                            <span key={index} className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full border border-green-200">
-                              {skill}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Soft Skills - Safe Rendering */}
-                    {extractedData.skillCategories?.soft && extractedData.skillCategories.soft.length > 0 && (
-                      <div>
-                        <h6 className="text-sm font-medium text-gray-700 mb-2">
-                          Soft Skills ({extractedData.skillCategories.soft.length}):
-                        </h6>
-                        <div className="flex flex-wrap gap-2">
-                          {extractedData.skillCategories.soft.map((skill: string, index: number) => (
-                            <span key={index} className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-full border border-purple-200">
-                              {skill}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Industry Skills - Safe Rendering */}
-                    {extractedData.skillCategories?.industry && extractedData.skillCategories.industry.length > 0 && (
-                      <div>
-                        <h6 className="text-sm font-medium text-gray-700 mb-2">
-                          Industry Skills ({extractedData.skillCategories.industry.length}):
-                        </h6>
-                        <div className="flex flex-wrap gap-2">
-                          {extractedData.skillCategories.industry.map((skill: string, index: number) => (
-                            <span key={index} className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded-full border border-orange-200">
-                              {skill}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                    <p className="text-yellow-800 text-sm">
-                      No skills were extracted from this resume. This might indicate:
-                    </p>
-                    <ul className="text-yellow-700 text-xs mt-2 list-disc list-inside">
-                      <li>PDF contains mostly images or non-selectable text</li>
-                      <li>Resume format is not standard</li>
-                      <li>Text extraction quality was poor</li>
-                    </ul>
-                  </div>
-                )}
-                
-                {/* Action Buttons */}
-                <div className="mt-6 pt-4 border-t border-green-200 flex space-x-3">
-                  <button
-                    onClick={resetUpload}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
-                  >
-                    Upload Another Resume
-                  </button>
-                  <button
-                    onClick={clearMessages}
-                    className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm font-medium"
-                  >
-                    Clear Messages
-                  </button>
-                </div>
-              </div>
-            </div>
-            
-            <button 
-              onClick={resetUpload} 
-              className="text-green-400 hover:text-green-600 p-2"
-              title="Clear results"
-            >
-              <X className="h-5 w-5" />
-            </button>
+      {/* File Upload Section */}
+      <div className="mb-8">
+        <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors">
+          <div className="mb-4">
+            <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+              <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </div>
+          
+          <label htmlFor="file-upload" className="cursor-pointer">
+            <span className="text-lg font-medium text-gray-700">
+              {file ? file.name : 'Choose PDF file or drag and drop'}
+            </span>
+            <input
+              id="file-upload"
+              type="file"
+              accept=".pdf"
+              onChange={handleFileSelect}
+              className="hidden"
+              disabled={isProcessing}
+            />
+          </label>
+          
+          <p className="text-sm text-gray-500 mt-2">
+            PDF files only, max 10MB
+          </p>
         </div>
-      )}
+      </div>
 
       {/* Error Display */}
       {error && (
-        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start space-x-3">
-          <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
-          <div className="flex-1">
-            <p className="text-red-700 font-medium">Upload Failed</p>
-            <p className="text-red-600 text-sm">{error}</p>
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-center">
+            <span className="text-red-500 mr-2">❌</span>
+            <p className="text-red-700">{error}</p>
           </div>
-          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">
-            <X className="h-4 w-4" />
+        </div>
+      )}
+
+      {/* Process Button */}
+      {file && !isProcessing && !extractedData && (
+        <div className="text-center mb-8">
+          <button
+            onClick={processResume}
+            className="px-8 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            🚀 Process Resume Automatically
           </button>
         </div>
       )}
 
-      {/* Success Display */}
-      {success && (
-        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start space-x-3">
-          <CheckCircle className="h-5 w-5 text-green-500 mt-0.5 flex-shrink-0" />
-          <div className="flex-1">
-            <p className="text-green-700 font-medium">Success!</p>
-            <p className="text-green-600 text-sm">{success}</p>
+      {/* Progress Indicator */}
+      {isProcessing && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700">{status}</span>
+            <span className="text-sm text-gray-500">{progress}%</span>
           </div>
-          <button onClick={() => setSuccess('')} className="text-green-400 hover:text-green-600">
-            <X className="h-4 w-4" />
-          </button>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              className="bg-blue-600 h-2 rounded-full transition-all duration-500"
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
+
+      {/* Results Display */}
+      {extractedData && (
+        <div className="space-y-6">
+          {/* Quality Indicator */}
+          <div className="bg-gray-50 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <span className="text-lg">
+                  {getQualityIcon(extractedData.quality)}
+                </span>
+                <span className="font-medium text-gray-700">
+                  Extraction Quality:
+                </span>
+                <span className={`font-semibold capitalize ${getQualityColor(extractedData.quality)}`}>
+                  {extractedData.quality}
+                </span>
+              </div>
+              <div className="text-sm text-gray-600">
+                Confidence: {extractedData.confidence}%
+              </div>
+            </div>
+          </div>
+
+          {/* Contact Information */}
+          {(extractedData.name || extractedData.email || extractedData.phoneNumber) && (
+            <div className="bg-blue-50 rounded-lg p-6">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <span className="mr-2">👤</span>
+                Contact Information
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {extractedData.name && (
+                  <div>
+                    <span className="text-sm text-gray-600">Name:</span>
+                    <p className="font-medium">{extractedData.name}</p>
+                  </div>
+                )}
+                {extractedData.email && (
+                  <div>
+                    <span className="text-sm text-gray-600">Email:</span>
+                    <p className="font-medium">{extractedData.email}</p>
+                  </div>
+                )}
+                {extractedData.phoneNumber && (
+                  <div>
+                    <span className="text-sm text-gray-600">Phone:</span>
+                    <p className="font-medium">{extractedData.phoneNumber}</p>
+                  </div>
+                )}
+                {extractedData.location && (
+                  <div>
+                    <span className="text-sm text-gray-600">Location:</span>
+                    <p className="font-medium">{extractedData.location}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Extracted Skills */}
+          {extractedData.extractedSkills.length > 0 && (
+            <div className="bg-green-50 rounded-lg p-6">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <span className="mr-2">🎯</span>
+                Extracted Skills ({extractedData.extractedSkills.length})
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {extractedData.extractedSkills.map((skill, index) => (
+                  <span
+                    key={index}
+                    className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium"
+                  >
+                    {skill}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Success Message */}
+          <div className="bg-green-100 border border-green-400 rounded-lg p-4">
+            <div className="flex items-center">
+              <span className="text-green-500 mr-2">✅</span>
+              <p className="text-green-700 font-medium">
+                Resume processed successfully! Redirecting to dashboard...
+              </p>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
-};
-
-export default ResumeUpload;
+}

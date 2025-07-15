@@ -291,39 +291,37 @@ export default function ResumeUpload() {
           </div>
         </div>
 
-        {/* Upload Area */}
-        {!analysis && (
-          <div className="border-2 border-dashed border-gray-300 rounded-xl p-12 text-center mb-8 hover:border-indigo-400 transition-colors">
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={handleFileChange}
-              className="hidden"
-              id="resume-upload"
-              disabled={loading}
-            />
-            <label 
-              htmlFor="resume-upload" 
-              className={`cursor-pointer ${loading ? 'cursor-not-allowed' : ''}`}
-            >
-              <div className="flex flex-col items-center">
-                <Upload className="w-16 h-16 text-gray-400 mb-4" />
-                <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                  {file ? file.name : 'Upload Your Resume'}
-                </h3>
-                <p className="text-gray-500 mb-4">
-                  Drop your PDF here or click to browse (Maximum 10MB)
-                </p>
-                <div className="text-sm text-gray-400">
-                  Supports: PDF files with selectable text
-                </div>
+        {/* Upload Area - Always Available */}
+        <div className="border-2 border-dashed border-gray-300 rounded-xl p-12 text-center mb-8 hover:border-indigo-400 transition-colors">
+          <input
+            type="file"
+            accept=".pdf"
+            onChange={handleFileChange}
+            className="hidden"
+            id="resume-upload"
+            disabled={loading}
+          />
+          <label 
+            htmlFor="resume-upload" 
+            className={`cursor-pointer ${loading ? 'cursor-not-allowed' : ''}`}
+          >
+            <div className="flex flex-col items-center">
+              <Upload className="w-16 h-16 text-gray-400 mb-4" />
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                {file ? file.name : analysis ? 'Upload Another Resume' : 'Upload Your Resume'}
+              </h3>
+              <p className="text-gray-500 mb-4">
+                Drop your PDF here or click to browse (Maximum 10MB)
+              </p>
+              <div className="text-sm text-gray-400">
+                Supports: PDF files with selectable text
               </div>
-            </label>
-          </div>
-        )}
+            </div>
+          </label>
+        </div>
 
-        {/* Upload Button */}
-        {file && !analysis && (
+        {/* Upload/Analyze Button - Always Available When File Selected */}
+        {file && (
           <div className="text-center mb-8">
             <button
               onClick={handleUpload}
@@ -338,7 +336,7 @@ export default function ResumeUpload() {
               ) : (
                 <span className="flex items-center justify-center gap-3">
                   <Zap className="w-5 h-5" />
-                  Start AI Analysis
+                  {analysis ? 'Analyze New Resume' : 'Start AI Analysis'}
                 </span>
               )}
             </button>
@@ -542,15 +540,8 @@ export default function ResumeUpload() {
               )}
             </div>
 
-            {/* Upload Another Resume Button */}
-            <div className="mt-8 pt-6 border-t border-gray-200 text-center">
-              <button
-                onClick={resetUpload}
-                className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 px-8 rounded-xl hover:from-indigo-700 hover:to-purple-700 transition-all duration-300 transform hover:scale-105 font-semibold"
-              >
-                Upload Another Resume
-              </button>
-            </div>
+            {/* Upload Another Resume Button - Remove This Duplicate */}
+            {/* This was creating confusion - upload area above handles everything */}
           </div>
         )}
 
